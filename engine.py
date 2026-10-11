@@ -29,8 +29,8 @@ except Exception:  # pragma: no cover
 APP_NAME = "OCRTrigger"
 VERSION = "2.0.0"
 
-DEFAULT = {"lang": "fr", "global_hotkey": "f9", "interval": 0.5, "ocr_pause": 3.0, "delay": 5,
-           "tray": True, "autostart": False, "overlay": False, "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
+DEFAULT = {"lang": "fr", "hotkey_ocr": "f9", "hotkey_series": "f8", "pause_series": True, "interval": 0.5, "ocr_pause": 3.0, "delay": 5,
+           "tray": True, "autostart": False, "overlay": False, "mini": False, "mini_rule": 0, "mini_pos": None, "pv_mode": "scan", "toast": True, "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
 NEW_RULE = {"name": "", "enabled": True, "region": [0, 0, 300, 100], "text": "", "key": "",
             "cooldown": 2.0, "hotkey": ""}
 NEW_SERIES = {"name": "", "enabled": True, "interval": 30.0, "jitter": 25.0, "repeat_max": 0,
@@ -69,6 +69,8 @@ def load_config():
             cfg = json.load(f)
     except Exception:
         cfg = {}
+    if "hotkey_ocr" not in cfg and cfg.get("global_hotkey"):  # ancien raccourci unique -> OCR
+        cfg["hotkey_ocr"] = cfg["global_hotkey"]
     for k, v in DEFAULT.items():
         cfg.setdefault(k, clone(v))
     for r in cfg["rules"]:
@@ -99,11 +101,22 @@ def text_matches(pattern, text):
 
 
 class Engine:
-    def __init__(self, log=print, notify=lambda: None):
+    def __init__(self, log=print, notify=lambda: None, toast=lambda msg: None):
         self.log = log
         self.notify = notify
+        self.toast = toast
+        self.last_shot = {}
+        self.hit_time = 0.0
+        self.hit_line = ""
+        self._shot = None
+        self._boxes = []
+        self.last_boxes = {}
+        self.scan_n = {}
+        self.scan_time = {}
+        self.hit_log = []
         self.cfg = load_config()
-        self.active = False
+        self.ocr_on = False
+        self.series_on = False
         self.ocr = None
         self.ocr_state = "loading"  # loading / ready / error
         self.ocr_lock = threading.Lock()
@@ -116,6 +129,10 @@ class Engine:
         self.next_run = {}
         self.ocr_pause_until = 0.0
         self._quit = threading.Event()
+
+    @property
+    def active(self):
+        return self.ocr_on or self.series_on
 
     # ---------- démarrage / arrêt ----------
     def start(self):
@@ -192,14 +209,16 @@ class Engine:
 
     def read_region(self, region):
         shot = self.crop(region)
+        self._shot = shot
         with self.ocr_lock:
             res, _ = self.ocr(shot)
+        self._boxes = [r[0] for r in res] if res else []
         return " ".join(r[1] for r in res) if res else ""
 
     # ---------- boucle des règles OCR ----------
     def loop(self):
         while not self._quit.wait(max(0.1, float(self.cfg["interval"]))):
-            if not self.active or self.ocr is None:
+            if not self.ocr_on or self.ocr is None:
                 continue
             for i, r in enumerate(list(self.cfg["rules"])):
                 if not r["enabled"] or not r["text"] or not r["key"]:
@@ -210,12 +229,19 @@ class Engine:
                     self.log(t("log_rule_read_err", name=r["name"], e=e))
                     continue
                 self.last_text[i] = txt
+                self.last_shot[i] = self._shot
+                self.last_boxes[i] = self._boxes
+                self.scan_n[i] = self.scan_n.get(i, 0) + 1
+                self.scan_time[i] = time.time()
                 if text_matches(r["text"], txt):
                     now = time.time()
                     if now - self.last.get(i, 0) >= float(r["cooldown"]):
                         self.last[i] = now
                         self.ocr_pause_until = now + float(self.cfg.get("ocr_pause", 3))
                         keyboard.send(r["key"])
+                        self.hit_time = now
+                        self.hit_line = "%s : %s --> %s" % (time.strftime("%H:%M:%S"), txt.strip()[:18] or r["text"], r["key"])
+                        self.hit_log = (self.hit_log + [self.hit_line])[-10:]
                         self.beep(True)
                         self.log(t("log_rule_hit", name=r["name"], text=r["text"], key=r["key"]))
 
@@ -228,8 +254,10 @@ class Engine:
         except AttributeError:
             pass
         try:
-            if self.cfg["global_hotkey"]:
-                keyboard.add_hotkey(self.cfg["global_hotkey"], self.toggle)
+            if self.cfg.get("hotkey_ocr"):
+                keyboard.add_hotkey(self.cfg["hotkey_ocr"], self.toggle_ocr)
+            if self.cfg.get("hotkey_series"):
+                keyboard.add_hotkey(self.cfg["hotkey_series"], self.toggle_series_run)
             for i, r in enumerate(self.cfg["rules"]):
                 if r["hotkey"]:
                     keyboard.add_hotkey(r["hotkey"], lambda i=i: self.toggle_rule(i))
@@ -240,15 +268,31 @@ class Engine:
             self.log(t("log_hotkey_err", e=e))
 
     # ---------- activation ----------
-    def set_active(self, value):
-        self.active = bool(value)
-        self.finished.clear()
-        self.sync_series()
-        self.log(t("log_started" if self.active else "log_stopped"))
+    def set_ocr(self, value):
+        """Capture OCR : indépendante des séries."""
+        self.ocr_on = bool(value)
+        self.log(t("log_ocr_on" if self.ocr_on else "log_ocr_off"))
+        self.toast(t("log_ocr_on" if self.ocr_on else "log_ocr_off"))
         self.notify()
 
-    def toggle(self):
-        self.set_active(not self.active)
+    def set_series_run(self, value):
+        """Séries d'actions : indépendantes de la capture OCR."""
+        self.series_on = bool(value)
+        self.finished.clear()
+        self.sync_series()
+        self.log(t("log_series_on" if self.series_on else "log_series_off"))
+        self.toast(t("log_series_on" if self.series_on else "log_series_off"))
+        self.notify()
+
+    def toggle_ocr(self):
+        self.set_ocr(not self.ocr_on)
+
+    def toggle_series_run(self):
+        self.set_series_run(not self.series_on)
+
+    def stop_all(self):
+        self.ocr_on = False
+        self.set_series_run(False)
 
     def toggle_rule(self, i):
         if i < len(self.cfg["rules"]):
@@ -282,7 +326,7 @@ class Engine:
 
     def sync_series(self):
         for i, s in enumerate(self.cfg["series"]):
-            want = self.active and s["enabled"] and i not in self.finished
+            want = self.series_on and s["enabled"] and i not in self.finished
             r = self.runners.get(i)
             alive = r is not None and r[0].is_alive()
             if want and not alive:
@@ -294,7 +338,9 @@ class Engine:
                 r[1].set()
 
     def wait_ocr_free(self, stop):
-        while time.time() < self.ocr_pause_until:
+        if not self.cfg.get("pause_series", True) or not self.ocr_on:
+            return True
+        while time.time() < self.ocr_pause_until and self.ocr_on and self.cfg.get("pause_series", True):
             if stop.wait(0.1):
                 return False
         return True

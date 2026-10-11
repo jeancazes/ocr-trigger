@@ -23,3 +23,11 @@ FR / EN, icône dans la zone de notification, démarrage avec Windows.
 - Vérifie les CGU de Star Citizen avant d'automatiser des actions.
 - Enregistreur : bouton « Enregistrer » dans une série, F10 pour arrêter.
 - Voyant HUD : visible en plein écran fenêtré sans bordure (pas en plein écran exclusif).
+
+## Mini-widget & notifications (Réglages → WIDGET & NOTIFICATIONS)
+- Mini-widget par-dessus le jeu (visible quand l'OCR est actif) : miniature 120 px de la zone d'une règle au choix, voyants OCR / TEXTE / ACTION / SÉRIE, texte lu et dernière ligne « heure : OCR --> action ». Déplaçable à la souris (position mémorisée).
+- Notifications Windows à chaque changement d'état OCR / Séries (bulle de la zone de notification, nécessite l'icône de notification).
+
+## Aperçu (fenêtre flottante comprise)
+- Image en direct + bandeau : voyants OCR / TEXTE / ACTION / SÉRIE (mêmes couleurs que le mini-widget), texte OCR lu en direct, 5 dernières actions « heure : OCR --> touche ».
+- Indicateur de lecture au choix (menu en haut de l'onglet Aperçu) : Balayage (ligne cyan), Pastille (clignote à chaque scan + n° de scan), Boîtes (rectangles autour des mots, orange au déclenchement).

@@ -25,7 +25,7 @@ except Exception:
 
 import customtkinter as ctk
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 import winutil
 import hud
@@ -33,6 +33,7 @@ from guide import Guide
 from hud import (BG, PANEL, PANEL2, SEL, LINE, CYAN, BLUE, TEXT, MUTED, OK, WARN, BAD, blend,
                  HudPanel, HudButton)
 from recorder import Recorder
+from mini import Mini, Band
 from engine import Engine, VERSION, NEW_RULE, NEW_SERIES, DEFAULT_SECS, app_dir, clone
 from i18n import t, set_lang
 from iconart import draw_icon
@@ -115,7 +116,7 @@ class App:
         self.quitting = False
         self.minimized = minimized
 
-        self.eng = Engine(log=self.log, notify=lambda: self.post(self.refresh_state))
+        self.eng = Engine(log=self.log, notify=lambda: self.post(self.refresh_state), toast=self.toast)
         set_lang(self.eng.cfg.get("lang", "fr"))
 
         ctk.set_appearance_mode("dark")
@@ -134,9 +135,11 @@ class App:
         self.root.after(300, lambda: self.root.iconphoto(True, self.logo_tk))
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        self.mini = Mini(self, FONT, MONO)
         self.build_ui()
         self.poll()
         self.start_tray()
+        self.mini.start()
         self.eng.start()
         if not minimized:
             self.splash = Splash(self)
@@ -217,13 +220,16 @@ class App:
         hd.create_image(14, 12, anchor="nw", image=self.logo_hd)
         hd.create_text(66, 24, text=t("app_title"), anchor="w", fill=CYAN, font=font(18, True))
         hd.create_text(66, 46, text=t("subtitle"), anchor="w", fill=MUTED, font=font(11))
-        self.hd_halo = hd.create_oval(0, 0, 1, 1, outline=OK, state="hidden")
-        self.hd_dot = hd.create_oval(0, 0, 1, 1, fill=MUTED, outline="")
-        self.hd_status = hd.create_text(0, 32, anchor="e", fill=MUTED, font=font(14, True))
-        self.hd_hint = hd.create_text(0, 32, anchor="e", fill=MUTED, font=font(11))
-        self.btn_main = button(hd, "", self.eng.toggle, "primary", width=150)
-        self.hd_btn = hd.create_window(0, 32, window=self.btn_main, anchor="e")
-        self.gt["start"] = self.btn_main
+        self.hg = {}  # deux blocs indépendants : OCR et Séries (voyant + état + bouton)
+        for key, cmd in (("ocr", self.eng.toggle_ocr), ("series", self.eng.toggle_series_run)):
+            g = {"halo": hd.create_oval(0, 0, 1, 1, outline=OK, state="hidden"),
+                 "dot": hd.create_oval(0, 0, 1, 1, fill=MUTED, outline=""),
+                 "name": hd.create_text(0, 24, anchor="e", fill=TEXT, font=font(12, True), text=t("hg_" + key)),
+                 "sub": hd.create_text(0, 43, anchor="e", fill=MUTED, font=font(10)),
+                 "btn": button(hd, "", cmd, "primary", width=118), "xy": (0, 32)}
+            g["win"] = hd.create_window(0, 32, window=g["btn"], anchor="e")
+            self.hg[key] = g
+            self.gt["start_" + key] = g["btn"]
         self.btn_help = button(hd, "?", lambda: self.start_guide(self.page, True), "tiny", width=30)
         self.hd_help = hd.create_window(0, 32, window=self.btn_help, anchor="e")
         self.hd_grid, self.hd_band = [], []
@@ -300,14 +306,17 @@ class App:
         w = hd.winfo_width()
         if w < 200:
             return
-        hd.coords(self.hd_btn, w - 14, 32)
-        sx = w - 14 - 150 - 22
-        hd.coords(self.hd_status, sx, 32)
-        x0 = hd.bbox(self.hd_status)[0]
-        self.hd_dot_xy = (x0 - 14, 32)
-        hd.coords(self.hd_hint, x0 - 34, 32)
-        hb = hd.bbox(self.hd_hint)
-        hd.coords(self.hd_help, (hb[0] if hb else x0 - 80) - 14, 32)
+        hd.coords(self.hd_help, w - 14, 32)
+        gx = w - 14 - 30 - 14
+        for key in ("series", "ocr"):  # de droite à gauche
+            g = self.hg[key]
+            hd.coords(g["win"], gx, 32)
+            tx = gx - 118 - 14
+            hd.coords(g["name"], tx, 24)
+            hd.coords(g["sub"], tx, 43)
+            left = min(hd.bbox(g["name"])[0], hd.bbox(g["sub"])[0])
+            g["xy"] = (left - 14, 32)
+            gx = left - 14 - 22
         if getattr(self, "hd_w", 0) != w:  # grille de fond recréée si la largeur change
             self.hd_w = w
             for i in self.hd_grid + self.hd_band:
@@ -358,18 +367,19 @@ class App:
             shape = math.sin(math.pi * (k + 0.5) / n)
             hd.coords(rid, x + k * 20, 0, x + (k + 1) * 20, 64)
             hd.itemconfigure(rid, fill=blend(PANEL, CYAN, 0.16 * shape ** 2))
-        on = self.eng.active
-        cx, cy = getattr(self, "hd_dot_xy", (0, 32))
-        hd.coords(self.hd_dot, cx - 5, cy - 5, cx + 5, cy + 5)
-        if on:
-            k = (t0 * 0.9) % 1
-            r = 5 + 10 * k
-            hd.itemconfigure(self.hd_halo, state="normal", outline=blend(OK, PANEL, k ** 0.7))
-            hd.coords(self.hd_halo, cx - r, cy - r, cx + r, cy + r)
-            hd.itemconfigure(self.hd_dot, fill=blend(OK, "#0b6b4a", 0.35 * (1 - math.sin(t0 * 3)) / 2 * 2))
-        else:
-            hd.itemconfigure(self.hd_halo, state="hidden")
-            hd.itemconfigure(self.hd_dot, fill=MUTED)
+        for key, on in (("ocr", self.eng.ocr_on), ("series", self.eng.series_on)):
+            g = self.hg[key]
+            cx, cy = g["xy"]
+            hd.coords(g["dot"], cx - 5, cy - 5, cx + 5, cy + 5)
+            if on:
+                k = (t0 * 0.9 + (0.45 if key == "series" else 0)) % 1  # les deux halos respirent en décalé
+                r = 5 + 10 * k
+                hd.itemconfigure(g["halo"], state="normal", outline=blend(OK, PANEL, k ** 0.7))
+                hd.coords(g["halo"], cx - r, cy - r, cx + r, cy + r)
+                hd.itemconfigure(g["dot"], fill=blend(OK, "#0b6b4a", 0.35 * (1 - math.sin(t0 * 3))))
+            else:
+                hd.itemconfigure(g["halo"], state="hidden")
+                hd.itemconfigure(g["dot"], fill=MUTED)
         # ligne d'accent : segment brillant qui glisse
         aw = self.acc.winfo_width()
         ax = (t0 * 260) % (aw + 300) - 150
@@ -418,6 +428,10 @@ class App:
                 self.gv["guides"].set(False)
         self.eng.save()
         self.guide = None
+
+    def save_pause(self):
+        self.eng.cfg["pause_series"] = bool(self.gv["pause_series"].get())
+        self.eng.save()
 
     def save_guides(self):
         self.eng.cfg["guides"] = bool(self.gv["guides"].get())
@@ -497,10 +511,11 @@ class App:
         if not hasattr(self, "hd") or not self.hd.winfo_exists():
             return
         e = self.eng
-        self.hd.itemconfigure(self.hd_status, text=t("status_on" if e.active else "status_off"),
-                              fill=OK if e.active else MUTED)
-        self.btn_main.configure(text=t("btn_stop" if e.active else "btn_start"))
-        self.hd.itemconfigure(self.hd_hint, text=t("hotkey_hint", key=(e.cfg["global_hotkey"] or "—").upper()))
+        for key, on, hk in (("ocr", e.ocr_on, e.cfg.get("hotkey_ocr")), ("series", e.series_on, e.cfg.get("hotkey_series"))):
+            g = self.hg[key]
+            self.hd.itemconfigure(g["sub"], text=f"{t('status_on' if on else 'status_off')} · {(hk or '—').upper()}",
+                                  fill=OK if on else MUTED)
+            g["btn"].configure(text=t("btn_stop" if on else "btn_start"))
         self.hd_layout()
         self.f_ocr.configure(text={"ready": t("ocr_ready"), "loading": t("ocr_loading"),
                                    "error": t("ocr_error")}[e.ocr_state],
@@ -734,6 +749,7 @@ class App:
         rows = [(r["name"] or "—", t("rule_summary", text=r["text"] or "…", key=r["key"] or "…"), r["enabled"])
                 for r in self.eng.cfg["rules"]]
         self.fill_list(self.r_list, rows, self.r_i, self.select_rule)
+        self.refresh_mini_opts()
 
     def select_rule(self, i):
         rules = self.eng.cfg["rules"]
@@ -1008,7 +1024,7 @@ class App:
             return
         try:
             nr = self.eng.next_run.get(self.s_i) if self.s_i is not None else None
-            if nr and self.eng.active:
+            if nr and self.eng.series_on:
                 self.s_cd.configure(text="⏳ " + t("next_in", s=max(0, int(nr - time.time() + 0.99))))
             else:
                 self.s_cd.configure(text="")
@@ -1024,7 +1040,7 @@ class App:
             if keyboard is None:
                 return
             if self.eng.active:
-                self.eng.set_active(False)
+                self.eng.stop_all()
             self.rec = Recorder("f10")
             self.rec.start()
             self.rec_hk = keyboard.add_hotkey("f10", lambda: self.post(lambda: self.finish_record(False)))
@@ -1167,9 +1183,14 @@ class App:
         self.pv_menu = option(top, [""], self.pv_var, None, 220)
         self.pv_menu.pack(side="left")
         button(top, t("prev_floating"), self.toggle_float, "primary", width=170).pack(side="right")
+        self.pv_modes = {"scan": t("pv_m_scan"), "dot": t("pv_m_dot"), "boxes": t("pv_m_boxes")}
+        self.pv_mode_var = tk.StringVar(value=self.pv_modes.get(self.eng.cfg.get("pv_mode", "scan"),
+                                                                 t("pv_m_scan")))
+        option(top, list(self.pv_modes.values()), self.pv_mode_var, self.save_pv_mode, 150).pack(
+            side="right", padx=(0, 10))
         self.pv_img = tk.Label(box, bg="black", bd=0)
         self.pv_img.grid(row=1, column=0, padx=14, pady=4)
-        self.pv_txt = label(box, "", CYAN, 12, mono=True, wraplength=700, justify="left")
+        self.pv_txt = Band(box, FONT, MONO, 11, 5)
         self.pv_txt.grid(row=2, column=0, sticky="w", padx=14, pady=8)
         self.gt.update(pv_menu=self.pv_menu, pv_img=self.pv_img, pv_float=top.winfo_children()[3],
                        pv_txt=self.pv_txt)
@@ -1186,13 +1207,38 @@ class App:
         v = self.pv_var.get()
         return names.index(v) if v in names else None
 
-    def render(self, widget, region, maxw, maxh):
+    def save_pv_mode(self, label_):
+        for k, v in self.pv_modes.items():
+            if v == label_:
+                self.eng.cfg["pv_mode"] = k
+        self.eng.save()
+
+    def render(self, widget, i, maxw, maxh):
+        eng = self.eng
+        region = eng.cfg["rules"][i]["region"]
         x, y, w, h = region
         w, h = max(1, w), max(1, h)
-        arr = self.eng.crop(region)
+        arr = eng.crop(region)
         img = Image.fromarray(np.ascontiguousarray(arr[:, :, ::-1]))
         k = min(maxw / w, maxh / h, 3.0)
-        img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+        img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.BILINEAR)
+        W, H = img.size
+        d, now, on = ImageDraw.Draw(img), time.time(), eng.ocr_on
+        mode = eng.cfg.get("pv_mode", "scan")
+        hit = now - eng.last.get(i, 0) < 1.5
+        if on and mode == "scan":  # balayage cyan qui défile pendant la lecture
+            per = max(0.8, float(eng.cfg["interval"]) * 3)
+            px = int((now % per) / per * W)
+            for n, c in enumerate(("#19e6ff", "#0f8fa8", "#0b4a58")):
+                d.line([(px - n * 4, 0), (px - n * 4, H)], fill=c, width=2)
+        elif mode == "dot":  # pastille qui s'allume à chaque scan
+            lit = on and now - eng.scan_time.get(i, 0) < 0.35
+            d.ellipse([W - 20, 8, W - 8, 20], fill=CYAN if lit else "#16324a", outline="#000000")
+            d.text((8, H - 16), "scan #%d" % eng.scan_n.get(i, 0), fill=CYAN if on else MUTED)
+        elif mode == "boxes":  # boîtes autour des mots reconnus
+            for poly in eng.last_boxes.get(i, []):
+                pts = [(p[0] * k, p[1] * k) for p in poly]
+                d.polygon(pts, outline=WARN if hit else CYAN, width=2)
         ph = ImageTk.PhotoImage(img)
         widget.configure(image=ph)
         widget.image = ph
@@ -1203,16 +1249,15 @@ class App:
         try:
             i = self.pv_index()
             if i is not None and (self.page == "preview" or self.float_win is not None):
-                region = self.eng.cfg["rules"][i]["region"]
                 if self.page == "preview":
-                    self.render(self.pv_img, region, 720, 330)
-                    txt = self.eng.last_text.get(i)
-                    self.pv_txt.configure(text=t("prev_ocr", txt=txt) if txt else t("prev_hint"))
+                    self.render(self.pv_img, i, 720, 300)
+                    self.pv_txt.update_state(self.eng, i)
                 if self.float_win is not None:
-                    self.render(self.float_lbl, region, 480, 300)
+                    self.render(self.float_lbl, i, 480, 260)
+                    self.float_band.update_state(self.eng, i)
         except Exception:
-            pass
-        self.root.after(500, lambda: self.preview_tick(gen))
+            self.crash_log()
+        self.root.after(150 if self.eng.ocr_on else 500, lambda: self.preview_tick(gen))
 
     def toggle_float(self):
         if self.float_win is not None:
@@ -1225,6 +1270,8 @@ class App:
         w.configure(bg="black")
         self.float_lbl = tk.Label(w, bg="black", bd=0)
         self.float_lbl.pack()
+        self.float_band = Band(w, FONT, MONO, 9, 5)
+        self.float_band.pack(fill="x")
         self.float_win = w
 
         def closed(_=None):
@@ -1251,16 +1298,24 @@ class App:
                    "autostart": tk.BooleanVar(value=bool(c["autostart"])),
                    "tray": tk.BooleanVar(value=bool(c["tray"])),
                    "overlay": tk.BooleanVar(value=bool(c.get("overlay"))),
+                   "mini": tk.BooleanVar(value=bool(c.get("mini"))),
+                   "toast": tk.BooleanVar(value=bool(c.get("toast", True))),
                    "sound": tk.BooleanVar(value=bool(c.get("sound"))),
                    "ui_sound": tk.BooleanVar(value=bool(c.get("ui_sound", True))),
-                   "guides": tk.BooleanVar(value=bool(c.get("guides", True)))}
+                   "guides": tk.BooleanVar(value=bool(c.get("guides", True))),
+                   "pause_series": tk.BooleanVar(value=bool(c.get("pause_series", True)))}
         section(box, t("set_general")).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         gf = ctk.CTkFrame(box, fg_color="transparent")
-        self.g_hot_lbl = valuebox(gf, c["global_hotkey"] or "—")
-        self.g_hot_lbl.pack(side="left")
-        self.g_hot_btn = button(gf, t("btn_set"), lambda: self.capture_key(self.set_ghot, self.g_hot_btn), width=90)
-        self.g_hot_btn.pack(side="left", padx=6)
-        rows = [(t("set_global_hotkey"), gf), (t("set_interval"), entry(box, self.gv["interval"], 80)),
+        self.g_hot = {}
+        for n, (key, cfgk) in enumerate((("ocr", "hotkey_ocr"), ("series", "hotkey_series"))):
+            label(gf, t("hg_" + key), MUTED, 11).pack(side="left", padx=(0 if n == 0 else 18, 6))
+            lb = valuebox(gf, c.get(cfgk) or "—", 90)
+            lb.pack(side="left")
+            bt = button(gf, t("btn_set"), lambda k=cfgk: self.capture_key(lambda v: self.set_ghot(k, v),
+                                                                           self.g_hot[k][1]), width=76)
+            bt.pack(side="left", padx=6)
+            self.g_hot[cfgk] = (lb, bt)
+        rows = [(t("set_hotkeys"), gf), (t("set_interval"), entry(box, self.gv["interval"], 80)),
                 (t("set_ocr_pause"), entry(box, self.gv["ocr_pause"], 80)),
                 (t("set_delay"), entry(box, self.gv["delay"], 80))]
         for i, (txt, w) in enumerate(rows, start=1):
@@ -1268,6 +1323,8 @@ class App:
             w.grid(row=i, column=1, sticky="w", pady=5)
         button(box, t("btn_save"), self.save_settings, "primary", width=130).grid(row=5, column=0, sticky="w",
                                                                                    padx=16, pady=8)
+        switch(box, t("set_pause_series"), self.gv["pause_series"], self.save_pause).grid(
+            row=5, column=1, sticky="w", pady=8)
         section(box, t("set_system")).grid(row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         switch(box, t("set_autostart"), self.gv["autostart"], self.toggle_autostart).grid(
             row=7, column=0, columnspan=2, sticky="w", padx=16, pady=5)
@@ -1290,13 +1347,25 @@ class App:
         self.gt.update(g_hot=gf, g_interval=box.grid_slaves(row=2, column=1)[0],
                        g_autostart=box.grid_slaves(row=7, column=0)[0], g_tray=box.grid_slaves(row=8, column=0)[0],
                        g_overlay=box.grid_slaves(row=9, column=0)[0])
-        section(box, t("set_about")).grid(row=13, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+        section(box, t("set_widgets")).grid(row=17, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+        switch(box, t("set_mini"), self.gv["mini"], self.save_mini).grid(
+            row=18, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        names = [r["name"] for r in c["rules"]] or [t("mini_none")]
+        mi = int(c.get("mini_rule", 0) or 0)
+        self.mini_var = tk.StringVar(value=names[mi] if 0 <= mi < len(names) else names[0])
+        label(box, t("set_mini_rule"), MUTED, 11).grid(row=19, column=0, sticky="w", padx=(16, 14), pady=5)
+        self.mini_opt = option(box, names, self.mini_var, self.save_mini_rule, 220)
+        self.mini_opt.grid(row=19, column=1, sticky="w", pady=5)
+        switch(box, t("set_toast"), self.gv["toast"], self.save_toast).grid(
+            row=20, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        self.gt["g_mini"] = box.grid_slaves(row=18, column=0)[0]
+        section(box, t("set_about")).grid(row=21, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         label(box, t("about_text", v=VERSION), MUTED, 11, justify="left").grid(
-            row=14, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
+            row=22, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
 
-    def set_ghot(self, k):
-        self.eng.cfg["global_hotkey"] = k
-        self.g_hot_lbl.configure(text=k or "—")
+    def set_ghot(self, cfgk, k):
+        self.eng.cfg[cfgk] = k
+        self.g_hot[cfgk][0].configure(text=k or "—")
         self.eng.save()
         self.eng.register_hotkeys()
         self.refresh_state()
@@ -1321,6 +1390,41 @@ class App:
         self.eng.save()
         self.sync_overlay()
 
+    def save_mini(self):
+        self.eng.cfg["mini"] = bool(self.gv["mini"].get())
+        self.eng.save()
+        self.mini.start()
+
+    def refresh_mini_opts(self):
+        om = getattr(self, "mini_opt", None)
+        try:
+            if om is None or not om.winfo_exists():
+                return
+            names = [r["name"] for r in self.eng.cfg["rules"]] or [t("mini_none")]
+            om.configure(values=names)
+            mi = int(self.eng.cfg.get("mini_rule", 0) or 0)
+            self.mini_var.set(names[mi] if 0 <= mi < len(names) else names[0])
+        except Exception:
+            pass
+
+    def save_mini_rule(self, name):
+        names = [r["name"] for r in self.eng.cfg["rules"]]
+        self.eng.cfg["mini_rule"] = names.index(name) if name in names else 0
+        self.eng.save()
+
+    def save_toast(self):
+        self.eng.cfg["toast"] = bool(self.gv["toast"].get())
+        self.eng.save()
+
+    def toast(self, msg):
+        """Notification Windows (bulle de la zone de notification)."""
+        if not self.eng.cfg.get("toast", True) or self.tray is None or self.quitting:
+            return
+        try:
+            self.tray.notify(str(msg), "OCR Trigger")
+        except Exception:
+            pass
+
     def save_uisound(self):
         self.eng.cfg["ui_sound"] = bool(self.gv["ui_sound"].get())
         self.eng.save()
@@ -1340,8 +1444,10 @@ class App:
             w.attributes("-alpha", 0.85)
             w.configure(bg=BG, highlightbackground=CYAN, highlightthickness=1)
             w.geometry("+16+16")
-            self.ov_lbl = tk.Label(w, bg=BG, font=(FONT, 11, "bold"), padx=10, pady=3)
-            self.ov_lbl.pack()
+            self.ov_lbls = {}
+            for key in ("ocr", "series"):
+                self.ov_lbls[key] = tk.Label(w, bg=BG, font=(FONT, 11, "bold"), padx=10, pady=1, anchor="w")
+                self.ov_lbls[key].pack(fill="x")
             self.ov = w
             w.update_idletasks()
             winutil.click_through(w)
@@ -1349,8 +1455,9 @@ class App:
             self.ov.destroy()
             self.ov = None
         if self.ov is not None:
-            on = self.eng.active
-            self.ov_lbl.config(text="● OCR " + t("status_on" if on else "status_off"), fg=OK if on else MUTED)
+            for key, on in (("ocr", self.eng.ocr_on), ("series", self.eng.series_on)):
+                self.ov_lbls[key].config(text=f"● {t('hg_' + key)} {t('status_on' if on else 'status_off')}",
+                                         fg=OK if on else MUTED)
 
     def toggle_autostart(self):
         want = bool(self.gv["autostart"].get())
@@ -1396,8 +1503,11 @@ class App:
         try:
             menu = pystray.Menu(
                 pystray.MenuItem(lambda i: t("tray_show"), lambda i, m=None: self.post(self.show_window), default=True),
-                pystray.MenuItem(lambda i: t("tray_stop") if self.eng.active else t("tray_start"),
-                                 lambda i, m=None: self.eng.toggle()),
+                pystray.MenuItem(lambda i: "OCR — " + t("tray_stop" if self.eng.ocr_on else "tray_start"),
+                                 lambda i, m=None: self.eng.toggle_ocr()),
+                pystray.MenuItem(lambda i: t("hg_series").capitalize() + " — " +
+                                 t("tray_stop" if self.eng.series_on else "tray_start"),
+                                 lambda i, m=None: self.eng.toggle_series_run()),
                 pystray.MenuItem(lambda i: t("tray_quit"), lambda i, m=None: self.post(self.quit_app)))
             self.tray = pystray.Icon("OCRTrigger", self.logo, "OCR Trigger", menu)
             self.tray.run_detached()
@@ -1408,7 +1518,8 @@ class App:
     def sync_tray(self):
         if self.tray is not None:
             try:
-                self.tray.title = "OCR Trigger — " + t("status_on" if self.eng.active else "status_off")
+                self.tray.title = (f"OCR Trigger — OCR {t('status_on' if self.eng.ocr_on else 'status_off')}"
+                                   f" · {t('hg_series')} {t('status_on' if self.eng.series_on else 'status_off')}")
                 self.tray.update_menu()
             except Exception:
                 pass
@@ -1434,6 +1545,10 @@ class App:
         if self.quitting:
             return
         self.quitting = True
+        try:
+            self.mini.destroy()
+        except Exception:
+            pass
         try:
             self.eng.shutdown()
         except Exception:
