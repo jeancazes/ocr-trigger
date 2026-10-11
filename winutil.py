@@ -44,6 +44,10 @@ def _vk(name):
         d = n.split()[-1]
         if d.isdigit():
             return 0x60 + int(d)
+    if len(n) == 1 and IS_WIN:  # caractère propre à la disposition (AZERTY : ^ $ ù * ! : é & …)
+        r = ctypes.windll.user32.VkKeyScanW(ord(n))
+        if r != -1 and (r & 0xFF) != 0xFF:
+            return r & 0xFF
     raise ValueError("touche inconnue : " + str(name))
 
 
@@ -68,10 +72,18 @@ def key_event(name, down):
     """Appui / relâchement d'une touche par scancode (SendInput). Lève une exception si impossible."""
     if not IS_WIN:
         raise OSError("SendInput : Windows uniquement")
-    vk = _vk(name)
     u = ctypes.windll.user32
-    sc = u.MapVirtualKeyW(vk, 0)
-    flags = 0x0008 | (0 if down else 0x0002) | (0x0001 if vk in _EXT else 0)
+    try:
+        vk = _vk(name)
+        sc = u.MapVirtualKeyW(vk, 0)
+        ext = vk in _EXT
+    except ValueError:  # dernier recours : scancode donné par la lib keyboard
+        import keyboard
+        codes = keyboard.key_to_scan_codes(str(name))
+        sc, ext = codes[0], False
+        if sc > 0xFF:
+            sc, ext = sc & 0xFF, True
+    flags = 0x0008 | (0 if down else 0x0002) | (0x0001 if ext else 0)
     inp = _IN(type=1, ki=_KI(0, sc, flags, 0, 0))
     if u.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN)) != 1:
         raise OSError("SendInput a échoué")
