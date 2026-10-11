@@ -1,0 +1,10 @@
+customtkinter
+pystray
+keyboard
+mouse
+mss
+numpy
+pillow
+dxcam
+rapidocr-onnxruntime
+pyinstaller
