@@ -15,7 +15,7 @@ def light_cols(eng, i, now):
     """Couleurs des 4 voyants (partagées par le mini-widget et l'aperçu)."""
     r = eng.cfg["rules"][i] if i is not None and 0 <= i < len(eng.cfg["rules"]) else None
     txt = eng.last_text.get(i, "") if r else ""
-    hit = bool(r) and bool(txt) and text_matches(r["text"], txt)
+    hit = bool(r) and bool(txt) and text_matches(r["text"], txt, float(r.get("fuzzy", 1.0)))
     ht = max(eng.last.get(i, 0), 0) if r else 0
     return hit, {"ocr": OK if eng.ocr_on else MUTED, "txt": CYAN if hit else MUTED,
                  "act": WARN if now - max(ht, 0) < 1.5 or now - eng.hit_time < 1.5 else MUTED,
@@ -157,7 +157,7 @@ class Mini:
         i = int(eng.cfg.get("mini_rule", 0) or 0)
         r = rules[i] if 0 <= i < len(rules) else None
         txt = eng.last_text.get(i, "") if r else ""
-        hit = bool(r) and bool(txt) and text_matches(r["text"], txt)
+        hit = bool(r) and bool(txt) and text_matches(r["text"], txt, float(r.get("fuzzy", 1.0)))
         shot = eng.last_shot.get(i) if r else None
         if shot is not None and id(shot) != self.shot_id:
             self.shot_id = id(shot)

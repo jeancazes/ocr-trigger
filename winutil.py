@@ -21,6 +21,73 @@ def mouse_click(x, y, button="left", hold=0.06):
     u.mouse_event(up, 0, 0, 0, 0)
 
 
+# ---- clavier : SendInput par scancodes (les jeux DirectInput ignorent les touches « virtuelles »)
+_VK = {"space": 0x20, "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B,
+       "backspace": 0x08, "shift": 0x10, "ctrl": 0x11, "control": 0x11, "alt": 0x12, "left": 0x25,
+       "up": 0x26, "right": 0x27, "down": 0x28, "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
+       "page up": 0x21, "page down": 0x22, "caps lock": 0x14, "left shift": 0xA0, "right shift": 0xA1,
+       "left ctrl": 0xA2, "right ctrl": 0xA3, "left alt": 0xA4, "right alt": 0xA5, "windows": 0x5B,
+       ";": 0xBA, "=": 0xBB, ",": 0xBC, "-": 0xBD, ".": 0xBE, "/": 0xBF, "`": 0xC0, "[": 0xDB,
+       "\\": 0xDC, "]": 0xDD, "'": 0xDE}
+_EXT = {0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0xA3, 0xA5}
+
+
+def _vk(name):
+    n = str(name).strip().lower()
+    if n in _VK:
+        return _VK[n]
+    if len(n) == 1 and n.isalnum():
+        return ord(n.upper())
+    if n.startswith("f") and n[1:].isdigit() and 1 <= int(n[1:]) <= 24:
+        return 0x6F + int(n[1:])
+    if n.startswith("num ") or n.startswith("numpad "):
+        d = n.split()[-1]
+        if d.isdigit():
+            return 0x60 + int(d)
+    raise ValueError("touche inconnue : " + str(name))
+
+
+class _KI(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _MI(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long), ("mouseData", ctypes.c_ulong),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _IN(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [("ki", _KI), ("mi", _MI)]
+    _anonymous_ = ("u",)
+    _fields_ = [("type", ctypes.c_ulong), ("u", _U)]
+
+
+def key_event(name, down):
+    """Appui / relâchement d'une touche par scancode (SendInput). Lève une exception si impossible."""
+    if not IS_WIN:
+        raise OSError("SendInput : Windows uniquement")
+    vk = _vk(name)
+    u = ctypes.windll.user32
+    sc = u.MapVirtualKeyW(vk, 0)
+    flags = 0x0008 | (0 if down else 0x0002) | (0x0001 if vk in _EXT else 0)
+    inp = _IN(type=1, ki=_KI(0, sc, flags, 0, 0))
+    if u.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_IN)) != 1:
+        raise OSError("SendInput a échoué")
+
+
+def send_key(combo, hold=0.06):
+    """Appuie sur une touche ou un combo (« ctrl+f5 »), maintient `hold` s, relâche."""
+    keys = [k.strip() for k in str(combo).split("+") if k.strip()]
+    for k in keys:
+        key_event(k, True)
+        time.sleep(0.01)
+    time.sleep(hold)
+    for k in reversed(keys):
+        key_event(k, False)
+
+
 def single_instance():
     """True si c'est la seule instance. Garde le handle vivant tant que le process tourne."""
     if not IS_WIN:

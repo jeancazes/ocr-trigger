@@ -34,6 +34,7 @@ from hud import (BG, PANEL, PANEL2, SEL, LINE, CYAN, BLUE, TEXT, MUTED, OK, WARN
                  HudPanel, HudButton)
 from recorder import Recorder
 from mini import Mini, Band
+import cond
 from engine import Engine, VERSION, NEW_RULE, NEW_SERIES, DEFAULT_SECS, app_dir, clone
 from i18n import t, set_lang
 from iconart import draw_icon
@@ -688,13 +689,18 @@ class App:
         ed.grid(row=0, column=0, sticky="nsew", padx=18, pady=14)
         ed.grid_columnconfigure(1, weight=1)
         self.rv = {"name": tk.StringVar(), "text": tk.StringVar(), "cooldown": tk.StringVar(),
-                   "enabled": tk.BooleanVar()}
+                   "enabled": tk.BooleanVar(), "toast": tk.BooleanVar(value=True),
+                   "message": tk.StringVar(), "hold": tk.StringVar(), "fuzzy": tk.StringVar()}
+        self.fz = {"1.0": t("fz_exact"), "0.85": t("fz_mid"), "0.75": t("fz_wide")}
         self.r_key, self.r_hot, self.r_region = "", "", [0, 0, 300, 100]
         section(ed, t("ed_rule")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.field(ed, 1, t("f_name"), entry(ed, self.rv["name"], 260))
-        self.field(ed, 2, "", switch(ed, t("f_enabled"), self.rv["enabled"]))
+        sf = ctk.CTkFrame(ed, fg_color="transparent")
+        switch(sf, t("f_enabled"), self.rv["enabled"]).pack(side="left", padx=(0, 24))
+        switch(sf, t("f_toast"), self.rv["toast"]).pack(side="left")
+        self.field(ed, 2, "", sf)
         self.field(ed, 3, t("f_text"), entry(ed, self.rv["text"], 380))
-        label(ed, t("f_text_hint"), MUTED, 10).grid(row=4, column=1, sticky="w")
+        label(ed, t("f_text_hint"), MUTED, 10, wraplength=520, justify="left").grid(row=4, column=1, sticky="w")
 
         kf = ctk.CTkFrame(ed, fg_color="transparent")
         self.r_key_lbl = valuebox(kf)
@@ -719,8 +725,12 @@ class App:
             side="left", padx=6)
         self.field(ed, 8, t("f_region"), zf)
 
+        self.field(ed, 9, t("f_message"), entry(ed, self.rv["message"], 380))
+        self.field(ed, 10, t("f_hold"), entry(ed, self.rv["hold"], 80))
+        self.field(ed, 11, t("f_fuzzy"), option(ed, list(self.fz.values()), self.rv["fuzzy"], None, 200))
+
         bf = ctk.CTkFrame(ed, fg_color="transparent")
-        bf.grid(row=9, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        bf.grid(row=12, column=0, columnspan=2, sticky="w", pady=(18, 0))
         button(bf, t("btn_test"), self.test_rule, width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_save"), self.save_rule, "primary", width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_delete"), self.delete_rule, "danger", width=130).pack(side="left")
@@ -746,7 +756,7 @@ class App:
     def refresh_rule_list(self):
         if not hasattr(self, "r_list") or not self.r_list.winfo_exists():
             return
-        rows = [(r["name"] or "—", t("rule_summary", text=r["text"] or "…", key=r["key"] or "…"), r["enabled"])
+        rows = [(r["name"] or "—", t("rule_summary", text=r["text"] or "…", key=r["key"] or t("rule_alert")), r["enabled"])
                 for r in self.eng.cfg["rules"]]
         self.fill_list(self.r_list, rows, self.r_i, self.select_rule)
         self.refresh_mini_opts()
@@ -763,6 +773,10 @@ class App:
         self.rv["text"].set(r["text"])
         self.rv["cooldown"].set(str(r["cooldown"]))
         self.rv["enabled"].set(r["enabled"])
+        self.rv["toast"].set(r.get("toast", True))
+        self.rv["message"].set(r.get("message", ""))
+        self.rv["hold"].set(str(r.get("hold", 60)))
+        self.rv["fuzzy"].set(self.fz.get(str(float(r.get("fuzzy", 1.0))), t("fz_exact")))
         self.set_rkey(r["key"])
         self.set_rhot(r["hotkey"])
         self.set_rregion(r["region"])
@@ -784,9 +798,15 @@ class App:
             cd = to_float(self.rv["cooldown"].get())
         except ValueError:
             return self.set_msg(t("err_num"), BAD)
+        try:
+            hold = max(10, int(to_float(self.rv["hold"].get())))
+            cond.validate(self.rv["text"].get().strip()) if self.rv["text"].get().strip() else None
+        except ValueError as ex:
+            return self.set_msg(t("err_cond", e=ex) if "int" not in str(ex) and "float" not in str(ex) else t("err_num"), BAD)
+        fz = next((float(k) for k, v in self.fz.items() if v == self.rv["fuzzy"].get()), 1.0)
         r = self.eng.cfg["rules"][self.r_i]
-        r.update(name=self.rv["name"].get().strip(), text=self.rv["text"].get().strip(), key=self.r_key,
-                 hotkey=self.r_hot, cooldown=cd, enabled=self.rv["enabled"].get(), region=list(self.r_region))
+        r.update(message=self.rv["message"].get().strip(), hold=hold, fuzzy=fz, name=self.rv["name"].get().strip(), text=self.rv["text"].get().strip(), key=self.r_key,
+                 hotkey=self.r_hot, cooldown=cd, enabled=self.rv["enabled"].get(), toast=self.rv["toast"].get(), region=list(self.r_region))
         self.eng.save()
         self.eng.register_hotkeys()
         self.log(t("log_saved", name=r["name"]))
@@ -812,7 +832,13 @@ class App:
             try:
                 txt = self.eng.read_region(region)
                 self.log(t("log_test", txt=txt))
-                self.post(lambda: self.set_msg(t("log_test", txt=txt), CYAN))
+                expr = self.rv["text"].get().strip()
+                fz = next((float(k) for k, v in self.fz.items() if v == self.rv["fuzzy"].get()), 1.0)
+                ok, seen = cond.evaluate(expr, txt, fz) if expr else (False, [])
+                det = " ".join(("✔" if f else "✘") + " " + w for w, f in seen)
+                verdict = (t("test_ok") if ok else t("test_ko")) + (" — " + det if det else "")
+                self.log(verdict)
+                self.post(lambda: self.set_msg(t("log_test", txt=txt) + "\n" + verdict, OK if ok else WARN))
             except Exception as e:
                 self.log(str(e))
         threading.Thread(target=work, daemon=True).start()
@@ -1300,6 +1326,7 @@ class App:
                    "overlay": tk.BooleanVar(value=bool(c.get("overlay"))),
                    "mini": tk.BooleanVar(value=bool(c.get("mini"))),
                    "toast": tk.BooleanVar(value=bool(c.get("toast", True))),
+                   "toast_hit": tk.BooleanVar(value=bool(c.get("toast_hit", True))),
                    "sound": tk.BooleanVar(value=bool(c.get("sound"))),
                    "ui_sound": tk.BooleanVar(value=bool(c.get("ui_sound", True))),
                    "guides": tk.BooleanVar(value=bool(c.get("guides", True))),
@@ -1358,10 +1385,12 @@ class App:
         self.mini_opt.grid(row=19, column=1, sticky="w", pady=5)
         switch(box, t("set_toast"), self.gv["toast"], self.save_toast).grid(
             row=20, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        switch(box, t("set_toast_hit"), self.gv["toast_hit"], self.save_toast_hit).grid(
+            row=21, column=0, columnspan=2, sticky="w", padx=16, pady=5)
         self.gt["g_mini"] = box.grid_slaves(row=18, column=0)[0]
-        section(box, t("set_about")).grid(row=21, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+        section(box, t("set_about")).grid(row=22, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         label(box, t("about_text", v=VERSION), MUTED, 11, justify="left").grid(
-            row=22, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
+            row=23, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
 
     def set_ghot(self, cfgk, k):
         self.eng.cfg[cfgk] = k
@@ -1416,9 +1445,14 @@ class App:
         self.eng.cfg["toast"] = bool(self.gv["toast"].get())
         self.eng.save()
 
-    def toast(self, msg):
+    def save_toast_hit(self):
+        self.eng.cfg["toast_hit"] = bool(self.gv["toast_hit"].get())
+        self.eng.save()
+
+    def toast(self, msg, kind="state"):
         """Notification Windows (bulle de la zone de notification)."""
-        if not self.eng.cfg.get("toast", True) or self.tray is None or self.quitting:
+        gate = "toast_hit" if kind == "hit" else "toast"
+        if not self.eng.cfg.get(gate, True) or self.tray is None or self.quitting:
             return
         try:
             self.tray.notify(str(msg), "OCR Trigger")

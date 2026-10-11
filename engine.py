@@ -10,6 +10,7 @@ import unicodedata
 
 import numpy as np
 
+import cond
 import winutil
 from i18n import t
 
@@ -32,7 +33,7 @@ VERSION = "2.0.0"
 DEFAULT = {"lang": "fr", "hotkey_ocr": "f9", "hotkey_series": "f8", "pause_series": True, "interval": 0.5, "ocr_pause": 3.0, "delay": 5,
            "tray": True, "autostart": False, "overlay": False, "mini": False, "mini_rule": 0, "mini_pos": None, "pv_mode": "scan", "toast": True, "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
 NEW_RULE = {"name": "", "enabled": True, "region": [0, 0, 300, 100], "text": "", "key": "",
-            "cooldown": 2.0, "hotkey": ""}
+            "cooldown": 2.0, "hotkey": "", "toast": True, "message": "", "hold": 60, "fuzzy": 1.0}
 NEW_SERIES = {"name": "", "enabled": True, "interval": 30.0, "jitter": 25.0, "repeat_max": 0,
               "duration_max": 0.0, "hotkey": "", "steps": []}
 DEFAULT_SECS = {"key": 0.06, "hold": 2.0, "wait": 1.0, "click": 0.0}
@@ -76,6 +77,7 @@ def load_config():
     for r in cfg["rules"]:
         for k, v in NEW_RULE.items():
             r.setdefault(k, clone(v))
+        r["text"] = cond.migrate(r.get("text", ""))
     for s in cfg["series"]:
         for k, v in NEW_SERIES.items():
             s.setdefault(k, clone(v))
@@ -94,14 +96,13 @@ def norm(s):
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
-def text_matches(pattern, text):
-    """True si l'un des motifs (séparés par |) est contenu dans le texte lu."""
-    nt = norm(text)
-    return any(p.strip() and norm(p.strip()) in nt for p in str(pattern).split("|"))
+def text_matches(pattern, text, ratio=1.0):
+    """Condition ET / OU / SAUF (voir cond.py) évaluée sur le texte lu."""
+    return cond.evaluate(pattern, text, ratio)[0]
 
 
 class Engine:
-    def __init__(self, log=print, notify=lambda: None, toast=lambda msg: None):
+    def __init__(self, log=print, notify=lambda: None, toast=lambda msg, kind="state": None):
         self.log = log
         self.notify = notify
         self.toast = toast
@@ -162,6 +163,28 @@ class Engine:
         if self.cfg.get("sound"):
             threading.Thread(target=winutil.beep, args=(1400 if high else 800, 120), daemon=True).start()
 
+    # ---------- envoi de touches ----------
+    def press_key(self, key, hold=0.06):
+        """Scancodes via SendInput (jeux DirectInput) ; repli sur la lib keyboard."""
+        try:
+            winutil.send_key(key, hold)
+            return
+        except Exception as ex:
+            self.log(t("log_key_fallback", e=ex))
+        keyboard.send(key)
+
+    def key_down(self, key):
+        try:
+            winutil.key_event(key, True)
+        except Exception:
+            keyboard.press(key)
+
+    def key_up(self, key):
+        try:
+            winutil.key_event(key, False)
+        except Exception:
+            keyboard.release(key)
+
     # ---------- OCR ----------
     def load_ocr(self):
         try:
@@ -221,7 +244,7 @@ class Engine:
             if not self.ocr_on or self.ocr is None:
                 continue
             for i, r in enumerate(list(self.cfg["rules"])):
-                if not r["enabled"] or not r["text"] or not r["key"]:
+                if not r["enabled"] or not r["text"]:
                     continue
                 try:
                     txt = self.read_region(r["region"])
@@ -233,14 +256,26 @@ class Engine:
                 self.last_boxes[i] = self._boxes
                 self.scan_n[i] = self.scan_n.get(i, 0) + 1
                 self.scan_time[i] = time.time()
-                if text_matches(r["text"], txt):
+                if text_matches(r["text"], txt, float(r.get("fuzzy", 1.0))):
                     now = time.time()
                     if now - self.last.get(i, 0) >= float(r["cooldown"]):
                         self.last[i] = now
                         self.ocr_pause_until = now + float(self.cfg.get("ocr_pause", 3))
-                        keyboard.send(r["key"])
+                        if r["key"]:
+                            self.press_key(r["key"], max(10, int(r.get("hold", 60) or 60)) / 1000.0)
                         self.hit_time = now
                         self.hit_line = "%s : %s --> %s" % (time.strftime("%H:%M:%S"), txt.strip()[:18] or r["text"], r["key"])
+                        if r.get("toast", True):
+                            seen = txt.strip()[:40] or r["text"]
+                            if r.get("message"):
+                                class _D(dict):
+                                    def __missing__(s, k):
+                                        return "{" + k + "}"
+                                msg = str(r["message"]).format_map(_D(name=r["name"], text=seen, key=r["key"]))
+                            else:
+                                msg = "%s : « %s »%s" % (r["name"] or "OCR", seen,
+                                                         (" → " + r["key"]) if r["key"] else "")
+                            self.toast(msg, "hit")
                         self.hit_log = (self.hit_log + [self.hit_line])[-10:]
                         self.beep(True)
                         self.log(t("log_rule_hit", name=r["name"], text=r["text"], key=r["key"]))
@@ -382,11 +417,11 @@ class Engine:
     def do_step(self, st, j, stop):
         kind = st["type"]
         if kind in ("key", "hold"):
-            keyboard.press(st["key"])
+            self.key_down(st["key"])
             try:
                 stop.wait(self.rnd(st.get("secs", DEFAULT_SECS[kind]), j))
             finally:
-                keyboard.release(st["key"])
+                self.key_up(st["key"])
         elif kind == "click":
             winutil.mouse_click(st["x"], st["y"], st["button"], self.rnd(0.06, j))
         elif kind == "wait":

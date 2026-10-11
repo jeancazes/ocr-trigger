@@ -31,3 +31,12 @@ FR / EN, icône dans la zone de notification, démarrage avec Windows.
 ## Aperçu (fenêtre flottante comprise)
 - Image en direct + bandeau : voyants OCR / TEXTE / ACTION / SÉRIE (mêmes couleurs que le mini-widget), texte OCR lu en direct, 5 dernières actions « heure : OCR --> touche ».
 - Indicateur de lecture au choix (menu en haut de l'onglet Aperçu) : Balayage (ligne cyan), Pastille (clignote à chaque scan + n° de scan), Boîtes (rectangles autour des mots, orange au déclenchement).
+
+## Toast à la détection
+- Réglages : interrupteur global ; onglet Règles : case « Toast à la détection » par règle. Format : « Nom : « texte vu » → touche ». La touche est facultative (règle « alerte seule »).
+
+## Conditions, message de toast, durée d'appui (onglet Règles)
+- Texte à détecter : `ET`, `OU`, `SAUF` (ou `PAS`), parenthèses, "phrase exacte". Ex. `danger ET (moteur OU bouclier) SAUF test`. Priorité : PAS > ET > OU. L'ancien séparateur `|` est converti automatiquement en `OU`.
+- « Tester l'OCR » indique CONDITION VRAIE/FAUSSE avec le détail ✔/✘ par terme.
+- Tolérance OCR par règle : Exacte / Moyenne (85 %) / Large (75 %).
+- Message du toast personnalisable : `{name}`, `{text}`, `{key}`. Durée d'appui de la touche en ms.
