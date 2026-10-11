@@ -88,6 +88,12 @@ STR = {
         "log_rec_done": "Enregistrement terminé : {n} étape(s) ajoutée(s).",
         "set_overlay": "Voyant HUD par-dessus le jeu (mode fenêtré sans bordure)",
         "set_sound": "Bip sonore à chaque déclenchement",
+        "set_uisound": "Sons discrets de l'interface",
+        "splash_loading": "Chargement du moteur OCR…", "splash_ready": "Prêt",
+        "g_prev": "◀ Précédent", "g_next": "Suivant ▶", "g_done": "Terminer ✔", "g_skip": "Passer ✕",
+        "g_never": "Ne plus afficher", "g_none": "Pas de guide sur cette page.",
+        "set_guides": "Guides pas à pas à la première utilisation", "btn_guides_reset": "Revoir tous les guides",
+        "log_guides_reset": "Guides réinitialisés.",
         "log_zone": "Zone : {r}", "log_point": "Point de clic : {p}",
         "log_test": "OCR lit : « {txt} »",
     },
@@ -176,6 +182,12 @@ STR = {
         "log_rec_done": "Recording done: {n} step(s) added.",
         "set_overlay": "HUD indicator over the game (borderless windowed mode)",
         "set_sound": "Beep on every trigger",
+        "set_uisound": "Subtle interface sounds",
+        "splash_loading": "Loading the OCR engine…", "splash_ready": "Ready",
+        "g_prev": "◀ Back", "g_next": "Next ▶", "g_done": "Done ✔", "g_skip": "Skip ✕",
+        "g_never": "Don't show again", "g_none": "No guide for this page.",
+        "set_guides": "Step-by-step guides on first use", "btn_guides_reset": "Replay all guides",
+        "log_guides_reset": "Guides reset.",
         "log_zone": "Area: {r}", "log_point": "Click point: {p}",
         "log_test": "OCR reads: “{txt}”",
     },
@@ -191,3 +203,79 @@ def t(_k, /, **kw):
     if s is None:
         s = STR["fr"].get(_k, _k)
     return s.format(**kw) if kw else s
+
+
+GUIDES = {
+    "fr": {
+        "rules": [
+            ("r_new", "Crée une règle", "Une règle = « si ce texte apparaît dans cette zone, appuie sur cette touche ». Clique sur + Nouvelle pour en ajouter."),
+            ("r_text", "Texte à détecter", "Tape le texte à repérer à l'écran. Plusieurs textes possibles avec | (ex. : Danger|Alerte). Majuscules et accents sont ignorés."),
+            ("r_key", "Touche à presser", "Clique sur Définir puis appuie sur la touche (ou combinaison) à envoyer au jeu. Le cooldown évite de la répéter en boucle."),
+            ("r_zone", "Zone de lecture", "Clique sur Choisir la zone : l'appli se cache, un compte à rebours te laisse passer dans le jeu, puis tu dessines le rectangle à lire. Fonctionne en plein écran."),
+            ("r_test", "Tester l'OCR", "Lit la zone tout de suite et affiche le texte vu par l'OCR en bas de l'écran et dans le Journal."),
+            ("r_save", "Enregistrer", "Pense à enregistrer la règle après chaque modification."),
+            ("start", "Démarrer la surveillance", "Active la lecture de l'écran. Le raccourci global (F9 par défaut) marche aussi depuis le jeu."),
+        ],
+        "series": [
+            ("s_new", "Crée une série", "Une série est une suite d'actions répétée par un minuteur. Clique sur + Nouvelle."),
+            ("s_nums", "Minuteur et hasard", "Exécution toutes les X secondes, avec un hasard ± en %. Tu peux limiter le nombre de répétitions et la durée totale (0 = illimité)."),
+            ("s_steps", "Liste des étapes", "Les étapes s'exécutent dans l'ordre. ▲ ▼ pour les déplacer, ✕ pour les supprimer, clic pour les modifier."),
+            ("s_form", "Formulaire d'étape", "Choisis le type : touche, maintenir une touche, clic à des coordonnées fixes ou attente. Les champs s'adaptent."),
+            ("s_add", "Ajouter l'étape", "Ajouter crée une nouvelle étape ; Mettre à jour modifie l'étape sélectionnée dans la liste."),
+            ("s_rec", "Enregistreur", "Clique sur Enregistrer, fais tes actions (touches et clics), puis appuie sur F10 : elles deviennent des étapes avec leurs pauses."),
+            ("s_save", "Enregistrer la série", "Sauvegarde la série et son raccourci on/off éventuel."),
+            ("start", "Lancer les séries", "Les séries actives tournent quand la surveillance est démarrée. Elles se mettent en pause quand une règle OCR se déclenche."),
+        ],
+        "preview": [
+            ("pv_menu", "Choisir la règle", "Sélectionne la règle dont tu veux voir la zone en direct."),
+            ("pv_img", "Image en direct", "Copie de ce que voit l'OCR. Vérifie que le texte est bien dans le cadre."),
+            ("pv_float", "Fenêtre flottante", "Ouvre l'aperçu dans une petite fenêtre toujours au-dessus, pratique pendant le jeu."),
+            ("pv_txt", "Texte lu", "Le dernier texte reconnu par l'OCR s'affiche ici quand la surveillance est active."),
+        ],
+        "settings": [
+            ("g_hot", "Raccourci global", "Touche pour démarrer / arrêter la surveillance, même depuis le jeu."),
+            ("g_interval", "Intervalle OCR", "Fréquence de lecture de l'écran. Plus court = plus réactif mais plus de CPU. Pense à Enregistrer."),
+            ("g_autostart", "Démarrer avec Windows", "Lance l'appli à l'ouverture de session, en administrateur, sans confirmation."),
+            ("g_tray", "Zone de notification", "Fermer la fenêtre réduit l'appli près de l'horloge au lieu de la quitter."),
+            ("g_overlay", "Voyant HUD", "Affiche un petit voyant ACTIF / ARRÊTÉ par-dessus le jeu (mode fenêtré sans bordure)."),
+        ],
+    },
+    "en": {
+        "rules": [
+            ("r_new", "Create a rule", "A rule = “if this text appears in this area, press this key”. Click + New to add one."),
+            ("r_text", "Text to detect", "Type the text to look for on screen. Several texts allowed with | (e.g. Danger|Alert). Case and accents are ignored."),
+            ("r_key", "Key to press", "Click Set then press the key (or combo) to send to the game. The cooldown prevents endless repeats."),
+            ("r_zone", "Reading area", "Click Pick the area: the app hides, a countdown lets you switch to the game, then you draw the rectangle to read. Works in fullscreen."),
+            ("r_test", "Test OCR", "Reads the area right now and shows what the OCR sees at the bottom of the window and in the Log."),
+            ("r_save", "Save", "Remember to save the rule after every change."),
+            ("start", "Start monitoring", "Turns on screen reading. The global hotkey (F9 by default) also works from inside the game."),
+        ],
+        "series": [
+            ("s_new", "Create a sequence", "A sequence is a list of actions repeated by a timer. Click + New."),
+            ("s_nums", "Timer and randomness", "Runs every X seconds, with ± % randomness. You can limit the repeats and the total duration (0 = unlimited)."),
+            ("s_steps", "Step list", "Steps run in order. ▲ ▼ to move them, ✕ to delete, click to edit."),
+            ("s_form", "Step form", "Pick the type: key, hold a key, click at fixed coordinates, or wait. The fields adapt."),
+            ("s_add", "Add the step", "Add creates a new step; Update changes the step selected in the list."),
+            ("s_rec", "Recorder", "Click Record, do your actions (keys and clicks), then press F10: they become steps with their pauses."),
+            ("s_save", "Save the sequence", "Saves the sequence and its optional on/off hotkey."),
+            ("start", "Run sequences", "Active sequences run while monitoring is started. They pause when an OCR rule fires."),
+        ],
+        "preview": [
+            ("pv_menu", "Pick the rule", "Select the rule whose area you want to see live."),
+            ("pv_img", "Live image", "A copy of what the OCR sees. Check that the text is inside the frame."),
+            ("pv_float", "Floating window", "Opens the preview in a small always-on-top window, handy while playing."),
+            ("pv_txt", "Text read", "The last text recognised by the OCR appears here while monitoring is active."),
+        ],
+        "settings": [
+            ("g_hot", "Global hotkey", "Key to start / stop monitoring, even from inside the game."),
+            ("g_interval", "OCR interval", "How often the screen is read. Shorter = more reactive but more CPU. Remember to Save."),
+            ("g_autostart", "Start with Windows", "Launches the app at login, as administrator, without a prompt."),
+            ("g_tray", "Notification area", "Closing the window minimizes the app near the clock instead of quitting."),
+            ("g_overlay", "HUD indicator", "Shows a small ACTIVE / STOPPED light over the game (borderless windowed mode)."),
+        ],
+    },
+}
+
+
+def guide_steps(page):
+    return [{"key": k, "title": a, "body": b} for k, a, b in GUIDES[LANG["code"]].get(page, [])]

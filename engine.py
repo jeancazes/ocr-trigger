@@ -30,7 +30,7 @@ APP_NAME = "OCRTrigger"
 VERSION = "2.0.0"
 
 DEFAULT = {"lang": "fr", "global_hotkey": "f9", "interval": 0.5, "ocr_pause": 3.0, "delay": 5,
-           "tray": True, "autostart": False, "overlay": False, "sound": False, "rules": [], "series": []}
+           "tray": True, "autostart": False, "overlay": False, "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
 NEW_RULE = {"name": "", "enabled": True, "region": [0, 0, 300, 100], "text": "", "key": "",
             "cooldown": 2.0, "hotkey": ""}
 NEW_SERIES = {"name": "", "enabled": True, "interval": 30.0, "jitter": 25.0, "repeat_max": 0,

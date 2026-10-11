@@ -10,6 +10,7 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
 import ctypes
+import math
 import queue
 import threading
 import time
@@ -27,6 +28,10 @@ import numpy as np
 from PIL import Image, ImageTk
 
 import winutil
+import hud
+from guide import Guide
+from hud import (BG, PANEL, PANEL2, SEL, LINE, CYAN, BLUE, TEXT, MUTED, OK, WARN, BAD, blend,
+                 HudPanel, HudButton)
 from recorder import Recorder
 from engine import Engine, VERSION, NEW_RULE, NEW_SERIES, DEFAULT_SECS, app_dir, clone
 from i18n import t, set_lang
@@ -43,10 +48,6 @@ except Exception:
 
 ERR_LOG = os.path.join(app_dir(), "error.log")
 
-BG, PANEL, PANEL2, SEL = "#04070c", "#0a111b", "#0f1a29", "#0c2638"
-LINE, CYAN, BLUE = "#16324a", "#19e6ff", "#1f8fff"
-TEXT, MUTED = "#d6ecff", "#6f8aa3"
-OK, WARN, BAD = "#2dffb0", "#ffb020", "#ff4d5e"
 FONT, MONO = "Segoe UI", "Consolas"
 
 
@@ -60,23 +61,17 @@ def label(p, text="", color=TEXT, size=12, bold=False, mono=False, **kw):
 
 
 def entry(p, var=None, width=110, **kw):
-    return ctk.CTkEntry(p, textvariable=var, width=width, height=30, corner_radius=4, fg_color=BG,
+    return ctk.CTkEntry(p, textvariable=var, width=width, height=30, corner_radius=0, fg_color=BG,
                         border_color=LINE, border_width=1, text_color=TEXT, font=font(12, mono=True), **kw)
 
 
 def button(p, text, cmd, kind="ghost", width=None, **kw):
-    st = {"primary": dict(fg_color="#0b3a52", border_color=CYAN, text_color=CYAN, hover_color="#0e4d6e"),
-          "ghost": dict(fg_color=PANEL2, border_color=LINE, text_color=TEXT, hover_color=SEL),
-          "danger": dict(fg_color=PANEL2, border_color=BAD, text_color=BAD, hover_color="#2a0f16"),
-          "tiny": dict(fg_color=PANEL2, border_color=LINE, text_color=MUTED, hover_color=SEL)}[kind]
-    if width:
-        kw["width"] = width
-    return ctk.CTkButton(p, text=text, command=cmd, height=28 if kind == "tiny" else 32, corner_radius=4,
-                         border_width=1, font=font(11 if kind == "tiny" else 12, True), **st, **kw)
+    tiny = kind == "tiny"
+    return HudButton(p, text, cmd, kind, width or 120, 28 if tiny else 32, font(11 if tiny else 12, True))
 
 
 def panel(p, **kw):
-    return ctk.CTkFrame(p, fg_color=PANEL, border_color=LINE, border_width=1, corner_radius=6, **kw)
+    return HudPanel(p, **kw)
 
 
 def section(p, text):
@@ -84,7 +79,7 @@ def section(p, text):
 
 
 def valuebox(p, text="", width=170):
-    return ctk.CTkLabel(p, text=text, width=width, height=30, corner_radius=4, fg_color=BG, text_color=CYAN,
+    return ctk.CTkLabel(p, text=text, width=width, height=30, corner_radius=0, fg_color=BG, text_color=CYAN,
                         font=font(12, True, True), anchor="w", padx=8)
 
 
@@ -95,7 +90,7 @@ def switch(p, text, var, cmd=None):
 
 def option(p, values, var=None, cmd=None, width=170):
     return ctk.CTkOptionMenu(p, values=values or [""], variable=var, command=cmd, width=width, height=30,
-                             corner_radius=4, fg_color=BG, button_color=LINE, button_hover_color=SEL,
+                             corner_radius=0, fg_color=BG, button_color=LINE, button_hover_color=SEL,
                              text_color=TEXT, font=font(12), dropdown_fg_color=PANEL2,
                              dropdown_hover_color=SEL, dropdown_text_color=TEXT)
 
@@ -125,6 +120,12 @@ class App:
 
         ctk.set_appearance_mode("dark")
         self.root = ctk.CTk(fg_color=BG)
+        if not minimized:
+            self.root.withdraw()
+        hud.SOUND["fn"] = self.ui_sound
+        self.slide_job = None
+        self.gt = {}
+        self.guide = None
         self.root.title("OCR Trigger")
         self.root.geometry("1040x700")
         self.root.minsize(940, 640)
@@ -137,6 +138,8 @@ class App:
         self.poll()
         self.start_tray()
         self.eng.start()
+        if not minimized:
+            self.splash = Splash(self)
         if winutil.IS_WIN:
             try:
                 self.eng.cfg["autostart"] = winutil.autostart_enabled()
@@ -195,6 +198,8 @@ class App:
     # ---------- layout
     def build_ui(self):
         self.gen += 1
+        self.guide = None
+        self.gt = {}
         keep = (getattr(self, "r_i", None), getattr(self, "s_i", None))
         for w in self.root.winfo_children():
             w.destroy()
@@ -204,36 +209,48 @@ class App:
         r.grid_columnconfigure(1, weight=1)
         r.grid_rowconfigure(2, weight=1)
 
-        # header
-        head = ctk.CTkFrame(r, fg_color=PANEL, corner_radius=0, height=64)
-        head.grid(row=0, column=0, columnspan=2, sticky="ew")
-        head.grid_columnconfigure(2, weight=1)
-        logo = ctk.CTkImage(self.logo, self.logo, size=(40, 40))
-        ctk.CTkLabel(head, image=logo, text="").grid(row=0, column=0, padx=(14, 10), pady=10, rowspan=2)
-        label(head, t("app_title"), CYAN, 18, True).grid(row=0, column=1, sticky="sw", pady=(8, 0))
-        label(head, t("subtitle"), MUTED, 11).grid(row=1, column=1, sticky="nw")
-        self.status = label(head, "", MUTED, 14, True)
-        self.status.grid(row=0, column=3, rowspan=2, padx=14)
-        self.btn_main = button(head, "", self.eng.toggle, "primary", width=150)
-        self.btn_main.grid(row=0, column=4, rowspan=2, padx=(0, 14))
-        self.hint = label(head, "", MUTED, 11)
-        self.hint.grid(row=0, column=2, rowspan=2, sticky="e", padx=10)
-        ctk.CTkFrame(r, fg_color=CYAN, height=2, corner_radius=0).grid(row=1, column=0, columnspan=2, sticky="ew")
+        # header (tout sur un canvas : grille + balayage lumineux animés derrière le texte)
+        hd = tk.Canvas(r, height=64, bg=PANEL, highlightthickness=0, bd=0)
+        hd.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.hd = hd
+        self.logo_hd = ImageTk.PhotoImage(self.logo.resize((40, 40), Image.LANCZOS))
+        hd.create_image(14, 12, anchor="nw", image=self.logo_hd)
+        hd.create_text(66, 24, text=t("app_title"), anchor="w", fill=CYAN, font=font(18, True))
+        hd.create_text(66, 46, text=t("subtitle"), anchor="w", fill=MUTED, font=font(11))
+        self.hd_halo = hd.create_oval(0, 0, 1, 1, outline=OK, state="hidden")
+        self.hd_dot = hd.create_oval(0, 0, 1, 1, fill=MUTED, outline="")
+        self.hd_status = hd.create_text(0, 32, anchor="e", fill=MUTED, font=font(14, True))
+        self.hd_hint = hd.create_text(0, 32, anchor="e", fill=MUTED, font=font(11))
+        self.btn_main = button(hd, "", self.eng.toggle, "primary", width=150)
+        self.hd_btn = hd.create_window(0, 32, window=self.btn_main, anchor="e")
+        self.gt["start"] = self.btn_main
+        self.btn_help = button(hd, "?", lambda: self.start_guide(self.page, True), "tiny", width=30)
+        self.hd_help = hd.create_window(0, 32, window=self.btn_help, anchor="e")
+        self.hd_grid, self.hd_band = [], []
+        hd.bind("<Configure>", self.hd_layout)
+        acc = tk.Canvas(r, height=3, bg=BG, highlightthickness=0, bd=0)
+        acc.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.acc = acc
+        acc.create_rectangle(0, 0, 4000, 3, fill=blend(BG, CYAN, 0.38), outline="")
+        self.acc_bar = acc.create_rectangle(0, 0, 0, 3, fill=CYAN, outline="")
 
         # sidebar
-        side = ctk.CTkFrame(r, fg_color=PANEL, corner_radius=0, width=190)
+        side = tk.Frame(r, bg=PANEL, width=190, highlightthickness=0)
         side.grid(row=2, column=0, sticky="ns")
         side.grid_propagate(False)
         self.nav = {}
         for i, (key, icon) in enumerate([("rules", "◎"), ("series", "⏱"), ("preview", "▣"),
                                          ("settings", "⚙"), ("log", "☰")]):
-            b = ctk.CTkButton(side, text=f"  {icon}   {t('nav_' + key)}", anchor="w", height=42,
-                              corner_radius=0, fg_color="transparent", hover_color=SEL, text_color=TEXT,
-                              font=font(13, True), command=lambda k=key: self.show(k))
+            b = HudButton(side, f"{icon}   {t('nav_' + key)}", lambda k=key: self.show(k), "nav", 190, 42,
+                          font(13, True))
             b.grid(row=i, column=0, sticky="ew", pady=(10 if i == 0 else 0, 0))
             self.nav[key] = b
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(6, weight=1)
+        self.side_cv = tk.Canvas(side, bg=PANEL, highlightthickness=0, bd=0, width=190)
+        self.side_cv.grid(row=6, column=0, sticky="nsew")
+        self.side_dots = []
+        self.side_cv.bind("<Configure>", self.side_layout)
         self.seg = ctk.CTkSegmentedButton(side, values=["FR", "EN"], command=self.change_lang, width=120,
                                           fg_color=BG, selected_color="#0b3a52", selected_hover_color="#0e4d6e",
                                           unselected_color=BG, unselected_hover_color=SEL, text_color=CYAN,
@@ -268,6 +285,8 @@ class App:
 
         self.show(self.page)
         self.refresh_state()
+        self.anim_n = 0
+        self.root.after(60, lambda g=self.gen: self.anim_loop(g))
         for line in self.log_lines:
             self._log_ui(line)
         if keep[0] is not None:
@@ -275,11 +294,194 @@ class App:
         if keep[1] is not None:
             self.select_series(keep[1])
 
+    # ---------- décor animé (header, ligne d'accent, colonne latérale)
+    def hd_layout(self, e=None):
+        hd = self.hd
+        w = hd.winfo_width()
+        if w < 200:
+            return
+        hd.coords(self.hd_btn, w - 14, 32)
+        sx = w - 14 - 150 - 22
+        hd.coords(self.hd_status, sx, 32)
+        x0 = hd.bbox(self.hd_status)[0]
+        self.hd_dot_xy = (x0 - 14, 32)
+        hd.coords(self.hd_hint, x0 - 34, 32)
+        hb = hd.bbox(self.hd_hint)
+        hd.coords(self.hd_help, (hb[0] if hb else x0 - 80) - 14, 32)
+        if getattr(self, "hd_w", 0) != w:  # grille de fond recréée si la largeur change
+            self.hd_w = w
+            for i in self.hd_grid + self.hd_band:
+                hd.delete(i)
+            gc = blend(PANEL, LINE, 0.55)
+            self.hd_grid = [hd.create_line(x, 0, x, 64, fill=gc) for x in range(0, w, 32)]
+            self.hd_grid += [hd.create_line(0, y, w, y, fill=gc) for y in (16, 48)]
+            self.hd_band = [hd.create_rectangle(0, 0, 0, 64, fill=PANEL, outline="") for _ in range(10)]
+            for i in self.hd_band + self.hd_grid:
+                hd.tag_lower(i)
+            for i in reversed(self.hd_grid):
+                hd.tag_lower(i)
+
+    def side_layout(self, e=None):
+        cv = self.side_cv
+        w, h = cv.winfo_width(), cv.winfo_height()
+        if w < 40 or h < 40:
+            return
+        cv.delete("all")
+        self.side_dots = []
+        for gx in range(14, w - 8, 18):
+            for gy in range(12, h - 8, 18):
+                self.side_dots.append((gx, gy, cv.create_rectangle(gx, gy, gx + 2, gy + 2, fill=PANEL, outline="")))
+        cv.create_line(14, h - 6, w - 14, h - 6, fill=LINE)
+        cv.create_line(14, h - 6, 54, h - 6, fill=CYAN, width=2)
+
+    def anim_loop(self, gen):
+        if gen != self.gen or self.quitting:
+            return
+        try:
+            if self.root.state() == "normal":
+                t0 = time.time()
+                self.anim_n += 1
+                self.anim_header(t0)
+                if self.anim_n % 2 == 0:
+                    self.anim_side(t0)
+        except Exception:
+            pass
+        self.root.after(50, lambda: self.anim_loop(gen))
+
+    def anim_header(self, t0):
+        hd, w = self.hd, getattr(self, "hd_w", 0)
+        if not w:
+            return
+        x = (t0 * 90) % (w + 400) - 200  # balayage lumineux horizontal
+        n = len(self.hd_band)
+        for k, rid in enumerate(self.hd_band):
+            shape = math.sin(math.pi * (k + 0.5) / n)
+            hd.coords(rid, x + k * 20, 0, x + (k + 1) * 20, 64)
+            hd.itemconfigure(rid, fill=blend(PANEL, CYAN, 0.16 * shape ** 2))
+        on = self.eng.active
+        cx, cy = getattr(self, "hd_dot_xy", (0, 32))
+        hd.coords(self.hd_dot, cx - 5, cy - 5, cx + 5, cy + 5)
+        if on:
+            k = (t0 * 0.9) % 1
+            r = 5 + 10 * k
+            hd.itemconfigure(self.hd_halo, state="normal", outline=blend(OK, PANEL, k ** 0.7))
+            hd.coords(self.hd_halo, cx - r, cy - r, cx + r, cy + r)
+            hd.itemconfigure(self.hd_dot, fill=blend(OK, "#0b6b4a", 0.35 * (1 - math.sin(t0 * 3)) / 2 * 2))
+        else:
+            hd.itemconfigure(self.hd_halo, state="hidden")
+            hd.itemconfigure(self.hd_dot, fill=MUTED)
+        # ligne d'accent : segment brillant qui glisse
+        aw = self.acc.winfo_width()
+        ax = (t0 * 260) % (aw + 300) - 150
+        self.acc.coords(self.acc_bar, ax, 0, ax + 150, 3)
+
+    def anim_side(self, t0):
+        cv = self.side_cv
+        for gx, gy, rid in self.side_dots:
+            v = 0.5 + 0.5 * math.sin(t0 * 1.7 - gy * 0.035 - gx * 0.02)
+            cv.itemconfigure(rid, fill=blend(PANEL, CYAN, 0.06 + 0.5 * v ** 4))
+
+    # ---------- guides pas à pas
+    def maybe_guide(self, name):
+        c = self.eng.cfg
+        if c.get("guides", True) and name not in c.get("guides_seen", []) and self.root.state() == "normal":
+            self.start_guide(name, False)
+
+    def start_guide(self, name, force=True):
+        if self.guide is not None and self.guide.alive:
+            return
+        if name not in ("rules", "series", "preview", "settings"):
+            return self.set_msg(t("g_none"), MUTED) if force else None
+        if name == "rules":
+            if not self.eng.cfg["rules"]:
+                self.new_rule()
+            elif self.r_i is None:
+                self.select_rule(0)
+        elif name == "series":
+            if not self.eng.cfg["series"]:
+                self.new_series()
+            elif self.s_i is None:
+                self.select_series(0)
+        elif name == "preview":
+            self.refresh_preview_rules()
+        self.root.update_idletasks()
+        self.guide = Guide(self, name, font)
+
+    def guide_done(self, name, never):
+        c = self.eng.cfg
+        seen = c.setdefault("guides_seen", [])
+        if name not in seen:
+            seen.append(name)
+        if never:
+            c["guides"] = False
+            if "guides" in getattr(self, "gv", {}):
+                self.gv["guides"].set(False)
+        self.eng.save()
+        self.guide = None
+
+    def save_guides(self):
+        self.eng.cfg["guides"] = bool(self.gv["guides"].get())
+        self.eng.save()
+
+    def reset_guides(self):
+        self.eng.cfg["guides_seen"] = []
+        self.eng.cfg["guides"] = True
+        self.gv["guides"].set(True)
+        self.eng.save()
+        self.set_msg(t("log_guides_reset"), OK)
+
+    def ui_sound(self, kind):
+        if self.eng.cfg.get("ui_sound", True):
+            winutil.ui_sound(kind)
+
+    def slide_to(self, new, steps=9):
+        """Transition de page : la nouvelle page glisse depuis la droite."""
+        self.finish_slide()
+        new.grid_forget()
+        new.place(in_=self.content, x=46, y=0, relwidth=1, relheight=1)
+        new.tkraise()
+        self.slide_new = new
+        t0 = time.time()
+
+        def step():
+            k = min(1.0, (time.time() - t0) / 0.2)
+            if k >= 1.0:
+                return self.finish_slide()
+            try:
+                new.place_configure(x=int(46 * (1 - k) ** 3))
+            except tk.TclError:
+                return
+            self.slide_job = self.root.after(16, step)
+        step()
+
+    def finish_slide(self):
+        if self.slide_job:
+            self.root.after_cancel(self.slide_job)
+            self.slide_job = None
+        new = getattr(self, "slide_new", None)
+        self.slide_new = None
+        if new is not None:
+            try:
+                new.place_forget()
+                new.grid(row=0, column=0, sticky="nsew")
+                new.tkraise()
+            except tk.TclError:
+                pass
+
     def show(self, name):
+        changed = name != getattr(self, "shown", None)
+        first = getattr(self, "shown", None) is None or getattr(self, "shown_gen", -1) != self.gen
         self.page = name
-        self.pages[name].tkraise()
+        if changed and not first:
+            self.slide_to(self.pages[name])
+            self.ui_sound("page")
+            self.root.after(450, lambda n=name: self.page == n and self.maybe_guide(n))
+        else:
+            self.finish_slide()
+            self.pages[name].tkraise()
+        self.shown, self.shown_gen = name, self.gen
         for k, b in self.nav.items():
-            b.configure(fg_color=SEL if k == name else "transparent", text_color=CYAN if k == name else TEXT)
+            b.set_selected(k == name)
         if name == "preview":
             self.refresh_preview_rules()
 
@@ -292,13 +494,14 @@ class App:
         self.sync_tray()
 
     def refresh_state(self):
-        if not hasattr(self, "status") or not self.status.winfo_exists():
+        if not hasattr(self, "hd") or not self.hd.winfo_exists():
             return
         e = self.eng
-        self.status.configure(text="● " + t("status_on" if e.active else "status_off"),
-                              text_color=OK if e.active else MUTED)
+        self.hd.itemconfigure(self.hd_status, text=t("status_on" if e.active else "status_off"),
+                              fill=OK if e.active else MUTED)
         self.btn_main.configure(text=t("btn_stop" if e.active else "btn_start"))
-        self.hint.configure(text=t("hotkey_hint", key=(e.cfg["global_hotkey"] or "—").upper()))
+        self.hd.itemconfigure(self.hd_hint, text=t("hotkey_hint", key=(e.cfg["global_hotkey"] or "—").upper()))
+        self.hd_layout()
         self.f_ocr.configure(text={"ready": t("ocr_ready"), "loading": t("ocr_loading"),
                                    "error": t("ocr_error")}[e.ocr_state],
                              text_color={"ready": OK, "loading": WARN, "error": BAD}[e.ocr_state])
@@ -424,12 +627,13 @@ class App:
         for w in frame.winfo_children():
             w.destroy()
         for i, (title, sub, on) in enumerate(rows):
-            b = ctk.CTkButton(frame, text=f"{'●' if on else '○'}  {title}\n     {sub}", anchor="w", height=50,
-                              corner_radius=4, border_width=1, font=font(12, i == sel),
-                              fg_color=SEL if i == sel else PANEL2, hover_color=SEL,
-                              border_color=CYAN if i == sel else LINE,
-                              text_color=TEXT if on else MUTED, command=lambda i=i: on_select(i))
-            b.pack(fill="x", pady=2)
+            sub = sub if len(sub) <= 34 else sub[:33] + "…"
+            b = HudButton(frame, f"{'●' if on else '○'}  {title}\n{sub}", lambda i=i: on_select(i), "item", 212, 52,
+                          font(12, True), font(10))
+            if not on:
+                b.fg = MUTED
+            b.set_selected(i == sel)
+            b.pack(pady=2)
 
     @staticmethod
     def swap(show, hide):
@@ -505,6 +709,8 @@ class App:
         button(bf, t("btn_test"), self.test_rule, width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_save"), self.save_rule, "primary", width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_delete"), self.delete_rule, "danger", width=130).pack(side="left")
+        self.gt.update(r_new=top.winfo_children()[1], r_text=ed.grid_slaves(row=3, column=1)[0], r_key=kf,
+                       r_zone=zf, r_test=bf.winfo_children()[0], r_save=bf.winfo_children()[1])
         self.swap(self.r_none, self.r_ed)
         self.refresh_rule_list()
 
@@ -620,7 +826,7 @@ class App:
         self.s_none.grid(row=0, column=0)
         ed = ctk.CTkScrollableFrame(right, fg_color="transparent")
         self.s_ed = ed
-        ed.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ed.grid(row=0, column=0, sticky="nsew", padx=8, pady=14)
         ed.grid_columnconfigure(1, weight=1)
         self.sv = {k: tk.StringVar() for k in ("name", "interval", "jitter", "repeat", "duration")}
         self.sv["enabled"] = tk.BooleanVar()
@@ -700,6 +906,8 @@ class App:
         bf.grid(row=9, column=0, columnspan=2, sticky="w", pady=(6, 0))
         button(bf, t("btn_save"), self.save_series, "primary", width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_delete"), self.delete_series, "danger", width=130).pack(side="left")
+        self.gt.update(s_new=top.winfo_children()[1], s_nums=nums, s_steps=self.st_list, s_form=sf, s_add=r4,
+                       s_rec=self.rec_btn, s_save=bf.winfo_children()[0])
         self.swap(self.s_none, self.s_ed)
         self.refresh_series_list()
 
@@ -963,6 +1171,8 @@ class App:
         self.pv_img.grid(row=1, column=0, padx=14, pady=4)
         self.pv_txt = label(box, "", CYAN, 12, mono=True, wraplength=700, justify="left")
         self.pv_txt.grid(row=2, column=0, sticky="w", padx=14, pady=8)
+        self.gt.update(pv_menu=self.pv_menu, pv_img=self.pv_img, pv_float=top.winfo_children()[3],
+                       pv_txt=self.pv_txt)
         self.root.after(500, lambda g=self.gen: self.preview_tick(g))
 
     def refresh_preview_rules(self):
@@ -1027,8 +1237,12 @@ class App:
     def build_settings(self, page):
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
-        box = ctk.CTkScrollableFrame(page, fg_color=PANEL, border_color=LINE, border_width=1, corner_radius=6)
-        box.grid(row=0, column=0, sticky="nsew")
+        outer = panel(page)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
+        box = ctk.CTkScrollableFrame(outer, fg_color="transparent")
+        box.grid(row=0, column=0, sticky="nsew", padx=6, pady=14)
         box.grid_columnconfigure(1, weight=1)
         c = self.eng.cfg
         self.gv = {"interval": tk.StringVar(value=str(c["interval"])),
@@ -1037,7 +1251,9 @@ class App:
                    "autostart": tk.BooleanVar(value=bool(c["autostart"])),
                    "tray": tk.BooleanVar(value=bool(c["tray"])),
                    "overlay": tk.BooleanVar(value=bool(c.get("overlay"))),
-                   "sound": tk.BooleanVar(value=bool(c.get("sound")))}
+                   "sound": tk.BooleanVar(value=bool(c.get("sound"))),
+                   "ui_sound": tk.BooleanVar(value=bool(c.get("ui_sound", True))),
+                   "guides": tk.BooleanVar(value=bool(c.get("guides", True)))}
         section(box, t("set_general")).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         gf = ctk.CTkFrame(box, fg_color="transparent")
         self.g_hot_lbl = valuebox(gf, c["global_hotkey"] or "—")
@@ -1061,13 +1277,22 @@ class App:
             row=9, column=0, columnspan=2, sticky="w", padx=16, pady=5)
         switch(box, t("set_sound"), self.gv["sound"], self.save_sound).grid(
             row=10, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        switch(box, t("set_uisound"), self.gv["ui_sound"], self.save_uisound).grid(
+            row=11, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        switch(box, t("set_guides"), self.gv["guides"], self.save_guides).grid(
+            row=15, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        button(box, t("btn_guides_reset"), self.reset_guides, width=220).grid(
+            row=16, column=0, columnspan=2, sticky="w", padx=16, pady=(4, 14))
         bf = ctk.CTkFrame(box, fg_color="transparent")
-        bf.grid(row=11, column=0, columnspan=2, sticky="w", padx=16, pady=8)
+        bf.grid(row=12, column=0, columnspan=2, sticky="w", padx=16, pady=8)
         button(bf, t("set_open_cfg"), lambda: winutil.open_folder(app_dir()), width=250).pack(side="left", padx=(0, 8))
         button(bf, t("set_quit"), self.quit_app, "danger", width=200).pack(side="left")
-        section(box, t("set_about")).grid(row=12, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+        self.gt.update(g_hot=gf, g_interval=box.grid_slaves(row=2, column=1)[0],
+                       g_autostart=box.grid_slaves(row=7, column=0)[0], g_tray=box.grid_slaves(row=8, column=0)[0],
+                       g_overlay=box.grid_slaves(row=9, column=0)[0])
+        section(box, t("set_about")).grid(row=13, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         label(box, t("about_text", v=VERSION), MUTED, 11, justify="left").grid(
-            row=13, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
+            row=14, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
 
     def set_ghot(self, k):
         self.eng.cfg["global_hotkey"] = k
@@ -1095,6 +1320,10 @@ class App:
         self.eng.cfg["overlay"] = bool(self.gv["overlay"].get())
         self.eng.save()
         self.sync_overlay()
+
+    def save_uisound(self):
+        self.eng.cfg["ui_sound"] = bool(self.gv["ui_sound"].get())
+        self.eng.save()
 
     def save_sound(self):
         self.eng.cfg["sound"] = bool(self.gv["sound"].get())
@@ -1215,6 +1444,58 @@ class App:
         except Exception:
             pass
         self.root.destroy()
+
+
+class Splash:
+    """Écran de démarrage : logo + barre animée, fermé quand l'OCR est prêt."""
+
+    def __init__(self, app):
+        self.app = app
+        w, h = 440, 230
+        r = app.root
+        top = tk.Toplevel(r)
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        sx, sy = r.winfo_screenwidth(), r.winfo_screenheight()
+        top.geometry(f"{w}x{h}+{(sx - w) // 2}+{(sy - h) // 2}")
+        cv = tk.Canvas(top, width=w, height=h, bg=BG, highlightthickness=0)
+        cv.pack()
+        c = 22
+        cv.create_polygon(c, 2, w - 80, 2, w - 70, 12, w - 30, 12, w - 20, 2, w - 2, 2, w - 2, h - c, w - c, h - 2,
+                          80, h - 2, 70, h - 12, 30, h - 12, 20, h - 2, 2, h - 2, 2, c, fill=PANEL, outline=LINE)
+        cv.create_line(2, c, c, 2, 110, 2, fill=CYAN, width=2)
+        cv.create_line(w - 2, h - c, w - c, h - 2, w - 90, h - 2, fill=CYAN, width=2)
+        self.img = ImageTk.PhotoImage(app.logo.resize((72, 72), Image.LANCZOS))
+        cv.create_image(34, 40, anchor="nw", image=self.img)
+        cv.create_text(126, 62, text=t("app_title"), anchor="w", fill=CYAN, font=font(26, True))
+        cv.create_text(128, 96, text=t("subtitle"), anchor="w", fill=MUTED, font=font(11))
+        self.msg = cv.create_text(34, 160, text=t("splash_loading"), anchor="w", fill=TEXT, font=font(11))
+        cv.create_rectangle(34, 182, w - 34, 186, fill=LINE, outline="")
+        self.bar = cv.create_rectangle(34, 182, 34, 186, fill=CYAN, outline="")
+        self.cv, self.top, self.w = cv, top, w
+        self.t0 = time.time()
+        self.tick()
+
+    def tick(self):
+        a, el = self.app, time.time() - self.t0
+        if not self.top.winfo_exists():
+            return
+        ready = a.eng.ocr_state != "loading" and el > 1.6
+        if ready or el > 25:
+            self.cv.itemconfigure(self.msg, text=t("splash_ready"), fill=OK)
+            self.cv.coords(self.bar, 34, 182, self.w - 34, 186)
+            self.cv.itemconfigure(self.bar, fill=OK)
+            self.top.after(350, self.close)
+            return
+        x = 34 + ((el * 380) % (self.w - 68 + 160)) - 160
+        self.cv.coords(self.bar, max(34, x), 182, min(self.w - 34, x + 160), 186)
+        self.top.after(30, self.tick)
+
+    def close(self):
+        self.top.destroy()
+        self.app.root.deiconify()
+        self.app.root.lift()
+        self.app.root.after(500, lambda: self.app.maybe_guide(self.app.page))
 
 
 def main():

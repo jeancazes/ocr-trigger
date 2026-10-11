@@ -99,3 +99,40 @@ def click_through(widget):
         u.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80)  # LAYERED | TRANSPARENT | TOOLWINDOW
     except Exception:
         pass
+
+
+_SND = {}
+
+
+def _wav(freq, ms, vol, sweep=0.0):
+    import io
+    import math
+    import struct
+    import wave
+    rate, n = 22050, int(22050 * ms / 1000)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(rate)
+        frames = bytearray()
+        for i in range(n):
+            env = math.sin(math.pi * i / n) ** 2
+            fr = freq + sweep * i / n
+            frames += struct.pack("<h", int(32767 * vol * env * math.sin(2 * math.pi * fr * i / rate)))
+        f.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+def ui_sound(kind):
+    """Petits sons d'interface (clic discret), non bloquants."""
+    if not IS_WIN:
+        return
+    try:
+        import winsound
+        if not _SND:
+            _SND.update(hover=_wav(2600, 14, 0.10), click=_wav(1500, 38, 0.22, -500),
+                        page=_wav(700, 70, 0.18, 500))
+        winsound.PlaySound(_SND[kind], winsound.SND_MEMORY | winsound.SND_ASYNC)
+    except Exception:
+        pass
