@@ -733,7 +733,8 @@ class App:
         bf.grid(row=12, column=0, columnspan=2, sticky="w", pady=(18, 0))
         button(bf, t("btn_test"), self.test_rule, width=130).pack(side="left", padx=(0, 8))
         button(bf, t("btn_save"), self.save_rule, "primary", width=130).pack(side="left", padx=(0, 8))
-        button(bf, t("btn_delete"), self.delete_rule, "danger", width=130).pack(side="left")
+        button(bf, t("btn_delete"), self.delete_rule, "danger", width=130).pack(side="left", padx=(0, 8))
+        button(bf, t("btn_test_key"), self.test_key, width=190).pack(side="left")
         self.gt.update(r_new=top.winfo_children()[1], r_text=ed.grid_slaves(row=3, column=1)[0], r_key=kf,
                        r_zone=zf, r_test=bf.winfo_children()[0], r_save=bf.winfo_children()[1])
         self.swap(self.r_none, self.r_ed)
@@ -822,6 +823,24 @@ class App:
         self.eng.save()
         self.eng.register_hotkeys()
         self.select_rule(None)
+
+    def test_key(self):
+        """Envoie la touche de la règle après le délai (le temps de passer dans le jeu)."""
+        key = self.r_key
+        if not key:
+            return self.set_msg(t("err_key"), BAD)
+        try:
+            hold = max(10, int(to_float(self.rv["hold"].get())))
+            delay = max(0, int(to_float(self.eng.cfg.get("delay", 5))))
+        except ValueError:
+            return self.set_msg(t("err_num"), BAD)
+        self.set_msg(t("test_key_wait", s=delay, key=key, ms=hold), CYAN)
+
+        def work():
+            time.sleep(delay)
+            self.eng.press_key(key, hold / 1000.0)
+            self.log(t("test_key_sent", key=key, ms=hold))
+        threading.Thread(target=work, daemon=True).start()
 
     def test_rule(self):
         if self.eng.ocr is None:
