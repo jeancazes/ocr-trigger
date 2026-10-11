@@ -40,3 +40,7 @@ FR / EN, icône dans la zone de notification, démarrage avec Windows.
 - « Tester l'OCR » indique CONDITION VRAIE/FAUSSE avec le détail ✔/✘ par terme.
 - Tolérance OCR par règle : Exacte / Moyenne (85 %) / Large (75 %).
 - Message du toast personnalisable : `{name}`, `{text}`, `{key}`. Durée d'appui de la touche en ms.
+
+## Mises à jour automatiques
+- Au démarrage (désactivable dans Réglages), l'appli interroge la dernière release GitHub. Si elle est plus récente : bandeau « Mettre à jour / Plus tard / Ignorer cette version ». « Mettre à jour » télécharge OCR_Trigger.exe, remplace l'actuel et relance.
+- La version affichée vient de VERSION dans engine.py : la mettre à jour avant de créer le tag (ex. 2.5.0 → tag v2.5).

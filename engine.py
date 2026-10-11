@@ -28,10 +28,10 @@ except Exception:  # pragma: no cover
     mss = None
 
 APP_NAME = "OCRTrigger"
-VERSION = "2.0.0"
+VERSION = "2.5.0"
 
 DEFAULT = {"lang": "fr", "hotkey_ocr": "f9", "hotkey_series": "f8", "pause_series": True, "interval": 0.5, "ocr_pause": 3.0, "delay": 5,
-           "tray": True, "autostart": False, "overlay": False, "mini": False, "mini_rule": 0, "mini_pos": None, "pv_mode": "scan", "toast": True, "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
+           "tray": True, "autostart": False, "overlay": False, "mini": False, "mini_rule": 0, "mini_pos": None, "pv_mode": "scan", "toast": True, "update_check": True, "update_skip": "", "sound": False, "ui_sound": True, "guides": True, "guides_seen": [], "rules": [], "series": []}
 NEW_RULE = {"name": "", "enabled": True, "region": [0, 0, 300, 100], "text": "", "key": "",
             "cooldown": 2.0, "hotkey": "", "toast": True, "message": "", "hold": 60, "fuzzy": 1.0}
 NEW_SERIES = {"name": "", "enabled": True, "interval": 30.0, "jitter": 25.0, "repeat_max": 0,

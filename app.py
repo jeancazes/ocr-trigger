@@ -35,6 +35,7 @@ from hud import (BG, PANEL, PANEL2, SEL, LINE, CYAN, BLUE, TEXT, MUTED, OK, WARN
 from recorder import Recorder
 from mini import Mini, Band
 import cond
+import updater
 from engine import Engine, VERSION, NEW_RULE, NEW_SERIES, DEFAULT_SECS, app_dir, clone
 from i18n import t, set_lang
 from iconart import draw_icon
@@ -137,10 +138,12 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.mini = Mini(self, FONT, MONO)
+        self.upd = None
         self.build_ui()
         self.poll()
         self.start_tray()
         self.mini.start()
+        self.root.after(8000, lambda: self.check_updates(False))
         self.eng.start()
         if not minimized:
             self.splash = Splash(self)
@@ -290,6 +293,8 @@ class App:
         self.f_cap = label(foot, "", MUTED, 11)
         self.f_cap.grid(row=0, column=2, padx=10)
 
+        self.upd_bar = None
+        self.show_update_bar()
         self.show(self.page)
         self.refresh_state()
         self.anim_n = 0
@@ -1406,10 +1411,15 @@ class App:
             row=20, column=0, columnspan=2, sticky="w", padx=16, pady=5)
         switch(box, t("set_toast_hit"), self.gv["toast_hit"], self.save_toast_hit).grid(
             row=21, column=0, columnspan=2, sticky="w", padx=16, pady=5)
+        uf = ctk.CTkFrame(box, fg_color="transparent")
+        self.gv["update_check"] = tk.BooleanVar(value=bool(c.get("update_check", True)))
+        switch(uf, t("set_update"), self.gv["update_check"], self.save_update_check).pack(side="left", padx=(0, 16))
+        button(uf, t("btn_check_now"), lambda: self.check_updates(True), width=200).pack(side="left")
+        uf.grid(row=22, column=0, columnspan=2, sticky="w", padx=16, pady=5)
         self.gt["g_mini"] = box.grid_slaves(row=18, column=0)[0]
-        section(box, t("set_about")).grid(row=22, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+        section(box, t("set_about")).grid(row=23, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
         label(box, t("about_text", v=VERSION), MUTED, 11, justify="left").grid(
-            row=23, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
+            row=24, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 14))
 
     def set_ghot(self, cfgk, k):
         self.eng.cfg[cfgk] = k
@@ -1463,6 +1473,98 @@ class App:
     def save_toast(self):
         self.eng.cfg["toast"] = bool(self.gv["toast"].get())
         self.eng.save()
+
+    # ---------- mises à jour
+    def save_update_check(self):
+        self.eng.cfg["update_check"] = bool(self.gv["update_check"].get())
+        self.eng.save()
+
+    def check_updates(self, manual):
+        if not manual and not self.eng.cfg.get("update_check", True):
+            return
+        if manual:
+            self.set_msg(t("upd_checking"), CYAN)
+
+        def work():
+            try:
+                info = updater.check(VERSION)
+            except Exception as e:
+                if manual:
+                    self.post(lambda: self.set_msg(t("upd_err", e=e), BAD))
+                return
+            if info is None:
+                if manual:
+                    self.post(lambda: self.set_msg(t("upd_none", v=VERSION), OK))
+                return
+            if not manual and info["tag"] == self.eng.cfg.get("update_skip"):
+                return
+            self.log(t("upd_found", v=info["tag"]))
+
+            def show():
+                self.upd = info
+                self.show_update_bar()
+            self.post(show)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_update_bar(self):
+        old = getattr(self, "upd_bar", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+            self.upd_bar = None
+        info = getattr(self, "upd", None)
+        if not info:
+            return
+        bar = tk.Frame(self.root, bg="#0b3a52", highlightbackground=CYAN, highlightthickness=1)
+        bar.grid(row=4, column=0, columnspan=2, sticky="ew")
+        note = (info["notes"].splitlines() or [""])[0][:90]
+        self.upd_lbl = tk.Label(bar, bg="#0b3a52", fg=CYAN, font=(FONT, 11, "bold"), anchor="w",
+                                text=t("upd_avail", v=info["tag"]) + (" — " + note if note else ""))
+        self.upd_lbl.pack(side="left", padx=12, pady=6)
+        self.upd_btns = []
+        for txt, cmd, kind in ((t("upd_go"), self.do_update, "primary"), (t("upd_later"), self.upd_later, "ghost"),
+                               (t("upd_skip"), self.upd_skip, "ghost")):
+            b = button(bar, txt, cmd, kind, width=150 if kind == "primary" else 170)
+            b.pack(side="right", padx=(0, 8), pady=4)
+            self.upd_btns.append(b)
+        self.upd_bar = bar
+
+    def upd_later(self):
+        self.upd = None
+        self.show_update_bar()
+
+    def upd_skip(self):
+        if self.upd:
+            self.eng.cfg["update_skip"] = self.upd["tag"]
+            self.eng.save()
+        self.upd_later()
+
+    def do_update(self):
+        info = self.upd
+        if not info:
+            return
+        if not (updater.can_self_update() and info["url"]):
+            import webbrowser
+            webbrowser.open(info["page"])
+            return
+        for b in self.upd_btns:
+            b.configure(state="disabled")
+        dest = os.path.join(os.path.dirname(sys.executable), "OCR_Trigger.new")
+
+        def work():
+            try:
+                updater.download(info["url"], dest, lambda p: self.post(
+                    lambda: self.upd_lbl.configure(text=t("upd_dl", p=int(p * 100)))))
+                self.eng.save()
+                self.post(lambda: self.upd_lbl.configure(text=t("upd_restart")))
+                updater.apply_and_restart(dest)
+                self.post(self.quit_app)
+            except Exception as e:
+                self.log(t("upd_err", e=e))
+                self.post(lambda: (self.set_msg(t("upd_err", e=e), BAD), self.show_update_bar()))
+        threading.Thread(target=work, daemon=True).start()
 
     def save_toast_hit(self):
         self.eng.cfg["toast_hit"] = bool(self.gv["toast_hit"].get())
